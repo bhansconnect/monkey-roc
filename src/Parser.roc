@@ -23,6 +23,8 @@ Node : [
     # The Str takes up 24 bytes and makes Node a less dense union overall.
     Ident Str,
     Int U64,
+    Not { expr : Index },
+    Negate { expr : Index },
 ]
 
 ParsedData : {
@@ -156,9 +158,8 @@ tokenMismatch = \p0, wanted, got ->
 # No need to wrap it in a special node.
 parseExpressionStatement : Parser -> (Parser, Result Index {})
 parseExpressionStatement = \p0 ->
-    (p1, res) = parseExpression p0 precLowest
-
-    (consumeOptionalSemicolon p1, res)
+    (p1, exprRes) = parseExpression p0 precLowest
+    (consumeOptionalSemicolon p1, exprRes)
 
 Precedence := U32
 precLowest = @Precedence 1
@@ -206,6 +207,26 @@ parsePrefix = \p0 ->
                     |> addError "could not parse \(intStr) as integer"
                     |> \p1 -> (p1, Err {})
 
+        Ok { kind: Bang, index: _ } ->
+            (p1, exprRes) = parseExpression (advanceTokens p0 1) precPrefix
+            when exprRes is
+                Ok exprIndex ->
+                    (p2, notIndex) = addNode p1 (Not { expr: exprIndex })
+                    (p2, Ok notIndex)
+
+                Err {} ->
+                    (p1, Err {})
+
+        Ok { kind: Minus, index: _ } ->
+            (p1, exprRes) = parseExpression (advanceTokens p0 1) precPrefix
+            when exprRes is
+                Ok exprIndex ->
+                    (p2, negateIndex) = addNode p1 (Negate { expr: exprIndex })
+                    (p2, Ok negateIndex)
+
+                Err {} ->
+                    (p1, Err {})
+
         Ok token ->
             debugStr =
                 Lexer.debugPrintToken [] p0.bytes token
@@ -243,7 +264,12 @@ okOrUnreachable = \res, str ->
 debugPrint : Str, ParsedData -> Str
 debugPrint = \buf, { nodes, program } ->
     List.walk program buf \b, index ->
-        debugPrintNode b nodes index
+        debugPrintNodeStatement b nodes index
+
+debugPrintNodeStatement : Str, List Node, Index -> Str
+debugPrintNodeStatement = \buf, nodes, index ->
+    debugPrintNode buf nodes index
+    |> Str.concat ";\n"
 
 debugPrintNode : Str, List Node, Index -> Str
 debugPrintNode = \buf, nodes, index ->
@@ -259,19 +285,27 @@ debugPrintNode = \buf, nodes, index ->
             |> debugPrintNode nodes ident
             |> Str.concat " = "
             |> debugPrintNode nodes expr
-            |> Str.concat ";\n"
 
         Return { expr } ->
             buf
             |> Str.concat "return "
             |> debugPrintNode nodes expr
-            |> Str.concat ";\n"
 
         Ident ident ->
             Str.concat buf ident
 
         Int int ->
             Str.concat buf (Num.toStr int)
+
+        Not { expr } ->
+            buf
+            |> Str.concat "!"
+            |> debugPrintNode nodes expr
+
+        Negate { expr } ->
+            buf
+            |> Str.concat "-"
+            |> debugPrintNode nodes expr
 
 expect
     input = Str.toUtf8
@@ -360,27 +394,36 @@ expect
 
     List.len exprs == 3
 
+formatedOutput = \input ->
+    input
+    |> Str.toUtf8
+    |> Lexer.lex
+    |> parse
+    |> okOrUnreachable "parse unexpectedly failed"
+    |> \parsed -> debugPrint "" parsed
+
 expect
     input =
         """
         let x = 5;
         let y = x;
         return 838383;
-        """
-    out =
-        input
-        |> Str.toUtf8
-        |> Lexer.lex
-        |> parse
-        |> okOrUnreachable "parse unexpectedly failed"
-        |> \parsed -> debugPrint "" parsed
-
-    expected =
-        """
-        let x = 5;
-        let y = x;
-        return 838383;
 
         """
+    out = formatedOutput input
+
+    expected = input
+    out == expected
+
+expect
+    input =
+        """
+        !5;
+        -15;
+
+        """
+    out = formatedOutput input
+
+    expected = input
     out == expected
 
