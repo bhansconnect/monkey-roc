@@ -9,6 +9,12 @@ Kind : [
     Int,
     Assign,
     Plus,
+    Minus,
+    Bang,
+    Asterisk,
+    Slash,
+    Lt,
+    Gt,
     Comma,
     Semicolon,
     LParen,
@@ -17,6 +23,13 @@ Kind : [
     RBrace,
     Function,
     Let,
+    True,
+    False,
+    If,
+    Else,
+    Return,
+    Eq,
+    NotEq,
 ]
 
 Token : {
@@ -30,11 +43,32 @@ lex = \bytes ->
         # TODO: Investigate the perf of this compared to a state machine based parser.
         # This is a branching prefix tree.
         when state.remaining is
+            ['r', 'e', 't', 'u', 'r', 'n', ..] ->
+                consumeToken state Return 6 |> helper
+
+            ['f', 'a', 'l', 's', 'e', ..] ->
+                consumeToken state False 5 |> helper
+
+            ['t', 'r', 'u', 'e', ..] ->
+                consumeToken state True 4 |> helper
+
+            ['e', 'l', 's', 'e', ..] ->
+                consumeToken state Else 4 |> helper
+
             ['l', 'e', 't', ..] ->
                 consumeToken state Let 3 |> helper
 
             ['f', 'n', ..] ->
                 consumeToken state Function 2 |> helper
+
+            ['i', 'f', ..] ->
+                consumeToken state If 2 |> helper
+
+            ['=', '=', ..] ->
+                consumeToken state Eq 2 |> helper
+
+            ['!', '=', ..] ->
+                consumeToken state NotEq 2 |> helper
 
             ['(', ..] ->
                 consumeToken state LParen 1 |> helper
@@ -53,6 +87,24 @@ lex = \bytes ->
 
             ['+', ..] ->
                 consumeToken state Plus 1 |> helper
+
+            ['-', ..] ->
+                consumeToken state Minus 1 |> helper
+
+            ['!', ..] ->
+                consumeToken state Bang 1 |> helper
+
+            ['*', ..] ->
+                consumeToken state Asterisk 1 |> helper
+
+            ['/', ..] ->
+                consumeToken state Slash 1 |> helper
+
+            ['<', ..] ->
+                consumeToken state Lt 1 |> helper
+
+            ['>', ..] ->
+                consumeToken state Gt 1 |> helper
 
             [',', ..] ->
                 consumeToken state Comma 1 |> helper
@@ -138,6 +190,10 @@ expect
     lexed == expected
 
 expect
+    # This is a horrid and overly gigantic test.
+    # Just followed what is in the book.
+    # Probably should write a test like this with by reprinting to source.
+    # That would be a lot less painful to update.
     bytes =
         Str.toUtf8
             """
@@ -148,7 +204,20 @@ expect
                 x + y;
             };
             let result = add(five, ten);
+
+            !-/*5;
+            5 < 10 > 5;
+
+            if (5 < 10) {
+                return true;
+            } else {
+                return false;
+            }
+
+            10 == 10;
+            10 != 9;
             """
+
     lexed = lex bytes
     kinds = List.map lexed .kind
     expectedKinds = [
@@ -188,6 +257,43 @@ expect
         Ident,
         RParen,
         Semicolon,
+        Bang,
+        Minus,
+        Slash,
+        Asterisk,
+        Int,
+        Semicolon,
+        Int,
+        Lt,
+        Int,
+        Gt,
+        Int,
+        Semicolon,
+        If,
+        LParen,
+        Int,
+        Lt,
+        Int,
+        RParen,
+        LBrace,
+        Return,
+        True,
+        Semicolon,
+        RBrace,
+        Else,
+        LBrace,
+        Return,
+        False,
+        Semicolon,
+        RBrace,
+        Int,
+        Eq,
+        Int,
+        Semicolon,
+        Int,
+        NotEq,
+        Int,
+        Semicolon,
         Eof,
     ]
 
@@ -218,6 +324,16 @@ expect
     expectedInts = [
         Str.toUtf8 "5",
         Str.toUtf8 "10",
+        Str.toUtf8 "5",
+        Str.toUtf8 "5",
+        Str.toUtf8 "10",
+        Str.toUtf8 "5",
+        Str.toUtf8 "5",
+        Str.toUtf8 "10",
+        Str.toUtf8 "10",
+        Str.toUtf8 "10",
+        Str.toUtf8 "10",
+        Str.toUtf8 "9",
     ]
 
     kinds == expectedKinds && idents == expectedIdents && ints == expectedInts
