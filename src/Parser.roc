@@ -1,5 +1,5 @@
 interface Parser
-    exposes [parse]
+    exposes [parse, debugPrint]
     imports [Lexer.{ LexedData }]
 
 Index : U32
@@ -188,6 +188,42 @@ okOrUnreachable = \res ->
         Ok v -> v
         Err _ -> crash "unreachable"
 
+debugPrint : Str, ParsedData -> Str
+debugPrint = \buf, { nodes, program } ->
+    List.walk program buf \b, index ->
+        debugPrintNode b nodes index
+
+debugPrintNode : Str, List Node, Index -> Str
+debugPrintNode = \buf, nodes, index ->
+    node =
+        when List.get nodes (Num.toNat index) is
+            Ok v -> v
+            Err _ -> crash "node index out of bounds"
+
+    when node is
+        Let { ident, expr } ->
+            buf
+            |> Str.concat "let "
+            |> debugPrintNode nodes ident
+            |> Str.concat " = "
+            |> debugPrintNode nodes expr
+            |> Str.concat ";\n"
+
+        Return { expr } ->
+            buf
+            |> Str.concat "return "
+            |> debugPrintNode nodes expr
+            |> Str.concat ";\n"
+
+        Ident ident ->
+            Str.concat buf ident
+
+        Int int ->
+            Str.concat buf (Num.toStr int)
+
+        None ->
+            Str.concat buf "none"
+
 expect
     input = Str.toUtf8
         """
@@ -273,3 +309,28 @@ expect
                 _ -> crash "all statements in program should be return statements"
 
     List.len exprs == 3
+
+expect
+    input =
+        """
+        let x = 5;
+        let y = 10;
+        return 838383;
+        """
+    out =
+        input
+        |> Str.toUtf8
+        |> Lexer.lex
+        |> parse
+        |> okOrUnreachable
+        |> \parsed -> debugPrint "" parsed
+
+    expected =
+        """
+        let x = none;
+        let y = none;
+        return none;
+
+        """
+    out == expected
+
