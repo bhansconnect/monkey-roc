@@ -25,6 +25,14 @@ Node : [
     Int U64,
     Not { expr : Index },
     Negate { expr : Index },
+    Plus { lhs : Index, rhs : Index },
+    Minus { lhs : Index, rhs : Index },
+    Eq { lhs : Index, rhs : Index },
+    NotEq { lhs : Index, rhs : Index },
+    Lt { lhs : Index, rhs : Index },
+    Gt { lhs : Index, rhs : Index },
+    Product { lhs : Index, rhs : Index },
+    Div { lhs : Index, rhs : Index },
 ]
 
 ParsedData : {
@@ -171,8 +179,62 @@ precPrefix = @Precedence 6
 precCall = @Precedence 7
 
 parseExpression : Parser, Precedence -> (Parser, Result Index {})
-parseExpression = \p0, @Precedence _precedence ->
-    parsePrefix p0
+parseExpression = \p0, basePrecedence ->
+    (p1, leftRes) = parsePrefix p0
+
+    when leftRes is
+        Ok left ->
+            parseInfix p1 left basePrecedence
+
+        Err {} -> (p1, Err {})
+
+parseInfix : Parser, Index, Precedence -> (Parser, Result Index {})
+parseInfix = \p0, lhsIndex, @Precedence basePrecedence ->
+    (@Precedence nextPrecedence) = peekPrecedence p0
+    if basePrecedence < nextPrecedence then
+        # parse actual infix
+        binOpRes =
+            when List.first p0.remainingTokens is
+                Ok { kind: Eq } -> Ok Eq
+                Ok { kind: NotEq } -> Ok NotEq
+                Ok { kind: Lt } -> Ok Lt
+                Ok { kind: Gt } -> Ok Gt
+                Ok { kind: Plus } -> Ok Plus
+                Ok { kind: Minus } -> Ok Minus
+                Ok { kind: Asterisk } -> Ok Product
+                Ok { kind: Slash } -> Ok Div
+                Ok _ -> Err NotInfix
+                Err _ -> eofCrash {}
+
+        when binOpRes is
+            Ok binOp ->
+                (p1, rhsRes) = parseExpression (advanceTokens p0 1) (@Precedence nextPrecedence)
+                when rhsRes is
+                    Ok rhsIndex ->
+                        (p2, binIndex) = addNode p1 (binOp { lhs: lhsIndex, rhs: rhsIndex })
+                        parseInfix p2 binIndex (@Precedence basePrecedence)
+
+                    Err {} ->
+                        (p1, Err {})
+
+            Err NotInfix ->
+                (p0, Ok lhsIndex)
+    else
+        (p0, Ok lhsIndex)
+
+peekPrecedence : Parser -> Precedence
+peekPrecedence = \p0 ->
+    when List.first p0.remainingTokens is
+        Ok { kind: Eq } -> precEquals
+        Ok { kind: NotEq } -> precEquals
+        Ok { kind: Gt } -> precLessGreater
+        Ok { kind: Lt } -> precLessGreater
+        Ok { kind: Plus } -> precSum
+        Ok { kind: Minus } -> precSum
+        Ok { kind: Asterisk } -> precProduct
+        Ok { kind: Slash } -> precProduct
+        Ok _ -> precLowest
+        Err _ -> eofCrash {}
 
 parsePrefix : Parser -> (Parser, Result Index {})
 parsePrefix = \p0 ->
@@ -299,13 +361,79 @@ debugPrintNode = \buf, nodes, index ->
 
         Not { expr } ->
             buf
-            |> Str.concat "!"
+            |> Str.concat "(!"
             |> debugPrintNode nodes expr
+            |> Str.concat ")"
 
         Negate { expr } ->
             buf
-            |> Str.concat "-"
+            |> Str.concat "(-"
             |> debugPrintNode nodes expr
+            |> Str.concat ")"
+
+        Eq { lhs, rhs } ->
+            buf
+            |> Str.concat "("
+            |> debugPrintNode nodes lhs
+            |> Str.concat " == "
+            |> debugPrintNode nodes rhs
+            |> Str.concat ")"
+
+        NotEq { lhs, rhs } ->
+            buf
+            |> Str.concat "("
+            |> debugPrintNode nodes lhs
+            |> Str.concat " != "
+            |> debugPrintNode nodes rhs
+            |> Str.concat ")"
+
+        Lt { lhs, rhs } ->
+            buf
+            |> Str.concat "("
+            |> debugPrintNode nodes lhs
+            |> Str.concat " < "
+            |> debugPrintNode nodes rhs
+            |> Str.concat ")"
+
+        Gt { lhs, rhs } ->
+            buf
+            |> Str.concat "("
+            |> debugPrintNode nodes lhs
+            |> Str.concat " > "
+            |> debugPrintNode nodes rhs
+            |> Str.concat ")"
+
+        Plus { lhs, rhs } ->
+            buf
+            |> Str.concat "("
+            |> debugPrintNode nodes lhs
+            |> Str.concat " + "
+            |> debugPrintNode nodes rhs
+            |> Str.concat ")"
+
+        Minus { lhs, rhs } ->
+            buf
+            |> Str.concat "("
+            |> debugPrintNode nodes lhs
+            |> Str.concat " - "
+            |> debugPrintNode nodes rhs
+            |> Str.concat ")"
+
+        Product { lhs, rhs } ->
+            buf
+            |> Str.concat "("
+            |> debugPrintNode nodes lhs
+            |> Str.concat " * "
+            |> debugPrintNode nodes rhs
+            |> Str.concat ")"
+
+        Div { lhs, rhs } ->
+            buf
+            |> Str.concat "("
+            |> debugPrintNode nodes lhs
+            |> Str.concat " / "
+            |> debugPrintNode nodes rhs
+            |> Str.concat ")"
 
 expect
     input = Str.toUtf8
@@ -424,6 +552,77 @@ expect
         """
     out = formatedOutput input
 
-    expected = input
+    expected =
+        """
+        (!5);
+        (-15);
+
+        """
+    out == expected
+
+expect
+    input =
+        """
+        5 + 5;
+        5 - 5;
+        5 * 5;
+        5 / 5;
+        5 > 5;
+        5 < 5;
+        5 == 5;
+        5 != 5;
+
+        """
+    out = formatedOutput input
+
+    expected =
+        """
+        (5 + 5);
+        (5 - 5);
+        (5 * 5);
+        (5 / 5);
+        (5 > 5);
+        (5 < 5);
+        (5 == 5);
+        (5 != 5);
+
+        """
+    out == expected
+
+expect
+    input =
+        """
+        -a * b
+        !-a
+        a + b + c
+        a + b - c
+        a * b * c
+        a * b / c
+        a + b / c
+        a + b * c + d / e - f
+        3 + 4; -5 * 5
+        5 > 4 == 3 < 4
+        5 < 4 != 3 > 4
+        3 + 4 * 5 == 3 * 1 + 4 * 5
+        """
+    out = formatedOutput input
+
+    expected =
+        """
+        ((-a) * b);
+        (!(-a));
+        ((a + b) + c);
+        ((a + b) - c);
+        ((a * b) * c);
+        ((a * b) / c);
+        (a + (b / c));
+        (((a + (b * c)) + (d / e)) - f);
+        (3 + 4);
+        ((-5) * 5);
+        ((5 > 4) == (3 < 4));
+        ((5 < 4) != (3 > 4));
+        ((3 + (4 * 5)) == ((3 * 1) + (4 * 5)));
+
+        """
     out == expected
 
