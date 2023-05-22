@@ -23,9 +23,6 @@ Node : [
     # The Str takes up 24 bytes and makes Node a less dense union overall.
     Ident Str,
     Int U64,
-
-    # This is temporary and should be removed once full parsing is setup.
-    None,
 ]
 
 ParsedData : {
@@ -91,9 +88,7 @@ parseProgram = \p0, program ->
                         parseReturnStatement (advanceTokens p0 1)
 
                     _ ->
-                        # These probably should be a parse error, but the book just skips them.
-                        # I am just gonna follow along.
-                        (advanceTokens p0 1, Err {})
+                        parseExpressionStatement p0
 
             when statement is
                 Ok index ->
@@ -112,14 +107,14 @@ parseLetStatement = \p0 ->
             ident =
                 Lexer.getIdent p0.bytes byteIndex
                 |> Str.fromUtf8
-                |> okOrUnreachable
+                |> okOrUnreachable "Ident is not valid utf8"
 
             (p1, identIndex) = addNode p0 (Ident ident)
-            (p2, exprRes) = parseExpression (advanceTokens p1 2)
+            (p2, exprRes) = parseExpression (advanceTokens p1 2) precLowest
             when exprRes is
                 Ok exprIndex ->
                     (p3, letIndex) = addNode p2 (Let { ident: identIndex, expr: exprIndex })
-                    (p3, Ok letIndex)
+                    (consumeOptionalSemicolon p3, Ok letIndex)
 
                 Err {} ->
                     (p2, Err {})
@@ -135,16 +130,16 @@ parseLetStatement = \p0 ->
             |> tokenMismatch "Ident" token
             |> \p1 -> (p1, Err {})
 
-        _ ->
+        [] ->
             eofCrash {}
 
 parseReturnStatement : Parser -> (Parser, Result Index {})
 parseReturnStatement = \p0 ->
-    (p1, exprRes) = parseExpression p0
+    (p1, exprRes) = parseExpression p0 precLowest
     when exprRes is
         Ok exprIndex ->
             (p2, retIndex) = addNode p1 (Return { expr: exprIndex })
-            (p2, Ok retIndex)
+            (consumeOptionalSemicolon p2, Ok retIndex)
 
         Err {} ->
             (p1, Err {})
@@ -154,28 +149,85 @@ tokenMismatch = \p0, wanted, got ->
     debugStr =
         Lexer.debugPrintToken [] p0.bytes got
         |> Str.fromUtf8
-        |> okOrUnreachable
+        |> okOrUnreachable "token is not valid utf8"
     addError p0 "Expected next token to be \(wanted), instead got: \(debugStr)"
 
-parseExpression : Parser -> (Parser, Result Index {})
-parseExpression = \p0 ->
-    # TODO: real impl
-    p0
-    |> skipToSemicolon
-    |> addNode None
-    |> \(p1, i) -> (p1, Ok i)
+# We just parse this into an expression.
+# No need to wrap it in a special node.
+parseExpressionStatement : Parser -> (Parser, Result Index {})
+parseExpressionStatement = \p0 ->
+    (p1, res) = parseExpression p0 precLowest
 
-skipToSemicolon : Parser -> Parser
-skipToSemicolon = \p0 ->
+    (consumeOptionalSemicolon p1, res)
+
+Precedence := U32
+precLowest = @Precedence 1
+precEquals = @Precedence 2
+precLessGreater = @Precedence 3
+precSum = @Precedence 4
+precProduct = @Precedence 5
+precPrefix = @Precedence 6
+precCall = @Precedence 7
+
+parseExpression : Parser, Precedence -> (Parser, Result Index {})
+parseExpression = \p0, @Precedence _precedence ->
+    parsePrefix p0
+
+parsePrefix : Parser -> (Parser, Result Index {})
+parsePrefix = \p0 ->
+    when List.first p0.remainingTokens is
+        Ok { kind: Ident, index: byteIndex } ->
+            ident =
+                Lexer.getIdent p0.bytes byteIndex
+                |> Str.fromUtf8
+                |> okOrUnreachable "ident is not valid utf8"
+
+            p0
+            |> advanceTokens 1
+            |> addNode (Ident ident)
+            |> \(p1, index) -> (p1, Ok index)
+
+        Ok { kind: Int, index: byteIndex } ->
+            intStr =
+                Lexer.getInt p0.bytes byteIndex
+                |> Str.fromUtf8
+                |> okOrUnreachable "int is not valid utf8"
+
+            when Str.toU64 intStr is
+                Ok int ->
+                    p0
+                    |> advanceTokens 1
+                    |> addNode (Int int)
+                    |> \(p1, index) -> (p1, Ok index)
+
+                Err _ ->
+                    p0
+                    |> advanceTokens 1
+                    |> addError "could not parse \(intStr) as integer"
+                    |> \p1 -> (p1, Err {})
+
+        Ok token ->
+            debugStr =
+                Lexer.debugPrintToken [] p0.bytes token
+                |> Str.fromUtf8
+                |> okOrUnreachable "token is not valid utf8"
+
+            p0
+            |> advanceTokens 1
+            |> addError "no prefix parse function for \(debugStr) found"
+            |> \p1 -> (p1, Err {})
+
+        Err _ ->
+            eofCrash {}
+
+consumeOptionalSemicolon : Parser -> Parser
+consumeOptionalSemicolon = \p0 ->
     when List.first p0.remainingTokens is
         Ok { kind: Semicolon } ->
             advanceTokens p0 1
 
-        Ok { kind: Eof } ->
-            p0
-
         Ok _ ->
-            skipToSemicolon (advanceTokens p0 1)
+            p0
 
         Err _ ->
             eofCrash {}
@@ -183,10 +235,10 @@ skipToSemicolon = \p0 ->
 eofCrash = \{} ->
     crash "token list did not end with Eof"
 
-okOrUnreachable = \res ->
+okOrUnreachable = \res, str ->
     when res is
         Ok v -> v
-        Err _ -> crash "unreachable"
+        Err _ -> crash "unreachable: \(str)"
 
 debugPrint : Str, ParsedData -> Str
 debugPrint = \buf, { nodes, program } ->
@@ -221,9 +273,6 @@ debugPrintNode = \buf, nodes, index ->
         Int int ->
             Str.concat buf (Num.toStr int)
 
-        None ->
-            Str.concat buf "none"
-
 expect
     input = Str.toUtf8
         """
@@ -234,7 +283,7 @@ expect
     parsed =
         Lexer.lex input
         |> parse
-        |> okOrUnreachable
+        |> okOrUnreachable "parse unexpectedly failed"
 
     identNames =
         parsed.program
@@ -280,6 +329,7 @@ expect
     expected = [
         "Expected next token to be Assign, instead got: { kind: Int, value: 5 }",
         "Expected next token to be Ident, instead got: { kind: Assign }",
+        "no prefix parse function for { kind: Assign } found",
         "Expected next token to be Ident, instead got: { kind: Int, value: 838383 }",
     ]
     errors == expected
@@ -294,7 +344,7 @@ expect
     parsed =
         Lexer.lex input
         |> parse
-        |> okOrUnreachable
+        |> okOrUnreachable "parse unexpectedly failed"
 
     exprs =
         parsed.program
@@ -314,7 +364,7 @@ expect
     input =
         """
         let x = 5;
-        let y = 10;
+        let y = x;
         return 838383;
         """
     out =
@@ -322,14 +372,14 @@ expect
         |> Str.toUtf8
         |> Lexer.lex
         |> parse
-        |> okOrUnreachable
+        |> okOrUnreachable "parse unexpectedly failed"
         |> \parsed -> debugPrint "" parsed
 
     expected =
         """
-        let x = none;
-        let y = none;
-        return none;
+        let x = 5;
+        let y = x;
+        return 838383;
 
         """
     out == expected
