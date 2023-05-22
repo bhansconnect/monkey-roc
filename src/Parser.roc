@@ -291,6 +291,26 @@ parsePrefix = \p0 ->
                 Err {} ->
                     (p1, Err {})
 
+        Ok { kind: LParen, index: _ } ->
+            (p1, exprRes) = parseExpression (advanceTokens p0 1) precLowest
+            when exprRes is
+                Ok exprIndex ->
+                    when List.first p1.remainingTokens is
+                        Ok { kind: RParen } ->
+                            (advanceTokens p1 1, Ok exprIndex)
+
+                        Ok token ->
+                            p1
+                            |> advanceTokens 1
+                            |> tokenMismatch "RParen" token
+                            |> \p2 -> (p2, Err {})
+
+                        Err _ ->
+                            eofCrash {}
+
+                Err {} ->
+                    (p1, Err {})
+
         Ok { kind: True, index: _ } ->
             p0
             |> advanceTokens 1
@@ -662,6 +682,28 @@ expect
         false;
         ((3 > 5) == false);
         ((3 < 5) == true);
+
+        """
+    out == expected
+
+expect
+    input =
+        """
+        1 + (2 + 3) + 4
+        (5 + 5) * 2
+        2 / (5 + 5);
+        -(5 + 5)
+        !(true == true)
+        """
+    out = formatedOutput input
+
+    expected =
+        """
+        ((1 + (2 + 3)) + 4);
+        ((5 + 5) * 2);
+        (2 / (5 + 5));
+        (-(5 + 5));
+        (!(true == true));
 
         """
     out == expected
