@@ -1,5 +1,5 @@
 interface Lexer
-    exposes [lex, debugPrint, Token, Kind, getInt, getIdent, LexedData]
+    exposes [lex, debugPrint, debugPrintToken, Token, Kind, getInt, getIdent, LexedData]
     imports []
 
 LexedData : {
