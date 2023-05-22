@@ -17,6 +17,7 @@ Program : List Index
 # This structure is more setup for execution speed.
 Node : [
     Let { ident : Index, expr : Index },
+    Return { expr : Index },
 
     # TODO: is it worth directly adding the Str to node? Maybe it should be boxed or in a side list?
     # The Str takes up 24 bytes and makes Node a less dense union overall.
@@ -86,6 +87,9 @@ parseProgram = \p0, program ->
                     Let ->
                         parseLetStatement (advanceTokens p0 1)
 
+                    Return ->
+                        parseReturnStatement (advanceTokens p0 1)
+
                     _ ->
                         # These probably should be a parse error, but the book just skips them.
                         # I am just gonna follow along.
@@ -133,6 +137,17 @@ parseLetStatement = \p0 ->
 
         _ ->
             eofCrash {}
+
+parseReturnStatement : Parser -> (Parser, Result Index {})
+parseReturnStatement = \p0 ->
+    (p1, exprRes) = parseExpression p0
+    when exprRes is
+        Ok exprIndex ->
+            (p2, retIndex) = addNode p1 (Return { expr: exprIndex })
+            (p2, Ok retIndex)
+
+        Err {} ->
+            (p1, Err {})
 
 tokenMismatch : Parser, Str, Lexer.Token -> Parser
 tokenMismatch = \p0, wanted, got ->
@@ -232,3 +247,29 @@ expect
         "Expected next token to be Ident, instead got: { kind: Int, value: 838383 }",
     ]
     errors == expected
+
+expect
+    input = Str.toUtf8
+        """
+        return 5;
+        return 10;
+        return 993322;
+        """
+    parsed =
+        Lexer.lex input
+        |> parse
+        |> okOrUnreachable
+
+    exprs =
+        parsed.program
+        |> List.map \retIndex ->
+            retNode =
+                when List.get parsed.nodes (Num.toNat retIndex) is
+                    Ok v -> v
+                    _ -> crash "let node outside of list bounds"
+
+            when retNode is
+                Return { expr } -> expr
+                _ -> crash "all statements in program should be return statements"
+
+    List.len exprs == 3
