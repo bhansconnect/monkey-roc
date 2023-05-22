@@ -210,3 +210,25 @@ expect
     expected = ["x", "y", "foobar"]
 
     identNames == expected
+
+expect
+    input = Str.toUtf8
+        """
+        let x 5;
+        let = 10;
+        let 838383;
+        """
+    errors =
+        Lexer.lex input
+        |> parse
+        |> \parsed ->
+            when parsed is
+                Ok _ -> crash "this should error"
+                Err errs -> errs
+
+    expected = [
+        "Expected next token to be Assign, instead got: { kind: Int, value: 5 }",
+        "Expected next token to be Ident, instead got: { kind: Assign }",
+        "Expected next token to be Ident, instead got: { kind: Int, value: 838383 }",
+    ]
+    errors == expected

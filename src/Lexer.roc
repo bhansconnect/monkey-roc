@@ -154,7 +154,7 @@ identLength = \remaining, size ->
 intLength = \remaining, size ->
     when List.get remaining (Num.toNat size) is
         Ok ch if isDigit ch ->
-            identLength remaining (size + 1)
+            intLength remaining (size + 1)
 
         _ ->
             size
