@@ -1,6 +1,11 @@
 interface Lexer
-    exposes [lex, debugPrint, debugPrintToken, Token, Kind, getInt, getIdent]
+    exposes [lex, debugPrint, Token, Kind, getInt, getIdent, LexedData]
     imports []
+
+LexedData : {
+    bytes : List U8,
+    tokens : List Token,
+}
 
 Kind : [
     Illegal,
@@ -37,7 +42,7 @@ Token : {
     index : U32,
 }
 
-lex : List U8 -> List Token
+lex : List U8 -> LexedData
 lex = \bytes ->
     helper = \state ->
         # TODO: Investigate the perf of this compared to a state machine based parser.
@@ -129,7 +134,8 @@ lex = \bytes ->
             [] ->
                 List.append state.tokens { kind: Eof, index: state.index }
 
-    helper { tokens: List.withCapacity 1024, remaining: bytes, index: 0 }
+    tokens = helper { tokens: List.withCapacity 1024, remaining: bytes, index: 0 }
+    { bytes, tokens }
 
 consumeToken = \{ tokens, remaining, index }, kind, size ->
     nextTokens = List.append tokens { kind, index }
@@ -167,8 +173,8 @@ getInt = \bytes, index ->
     len = intLength (List.drop bytes (Num.toNat index)) 1
     List.sublist bytes { start: Num.toNat index, len }
 
-debugPrint : List U8, List U8, List Token -> List U8
-debugPrint = \buf, bytes, tokens ->
+debugPrint : List U8, LexedData -> List U8
+debugPrint = \buf, { bytes, tokens } ->
     List.walk tokens buf \b, token ->
         debugPrintToken b bytes token
         |> List.append '\n'
@@ -229,13 +235,13 @@ debugPrintKind = \buf, kind ->
     List.concat buf (Str.toUtf8 out)
 
 expect
-    lexed = lex (Str.toUtf8 "") |> List.map .kind
+    lexed = lex (Str.toUtf8 "") |> .tokens |> List.map .kind
     expected = [Eof]
 
     lexed == expected
 
 expect
-    lexed = lex (Str.toUtf8 "=+(){},;") |> List.map .kind
+    lexed = lex (Str.toUtf8 "=+(){},;") |> .tokens |> List.map .kind
     expected = [
         Assign,
         Plus,
@@ -279,7 +285,7 @@ expect
             10 != 9;
             """
 
-    lexed = lex bytes
+    lexed = lex bytes |> .tokens
     kinds = List.map lexed .kind
     expectedKinds = [
         Let,

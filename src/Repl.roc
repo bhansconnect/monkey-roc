@@ -8,11 +8,11 @@ run =
     {} <- Stdout.write ">> " |> Task.await
     line <- Stdin.line |> Task.await
 
-    bytes = Str.toUtf8 line
     out =
-        bytes
+        line
+        |> Str.toUtf8
         |> Lexer.lex
-        |> \tokens -> Lexer.debugPrint [] bytes tokens
+        |> \lexedData -> Lexer.debugPrint [] lexedData
         |> Str.fromUtf8
         |> Result.withDefault "Bad Utf8\n"
     {} <- Stdout.write out |> Task.await

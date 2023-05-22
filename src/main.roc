@@ -16,7 +16,7 @@ main =
                 out =
                     bytes
                     |> Lexer.lex
-                    |> \tokens -> Lexer.debugPrint [] bytes tokens
+                    |> \lexedData -> Lexer.debugPrint [] lexedData
                     |> Str.fromUtf8
                     |> Result.withDefault "Bad Utf8\n"
                 Stderr.write out
