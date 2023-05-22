@@ -23,6 +23,8 @@ Node : [
     # The Str takes up 24 bytes and makes Node a less dense union overall.
     Ident Str,
     Int U64,
+    True,
+    False,
     Not { expr : Index },
     Negate { expr : Index },
     Plus { lhs : Index, rhs : Index },
@@ -289,6 +291,18 @@ parsePrefix = \p0 ->
                 Err {} ->
                     (p1, Err {})
 
+        Ok { kind: True, index: _ } ->
+            p0
+            |> advanceTokens 1
+            |> addNode True
+            |> \(p1, index) -> (p1, Ok index)
+
+        Ok { kind: False, index: _ } ->
+            p0
+            |> advanceTokens 1
+            |> addNode False
+            |> \(p1, index) -> (p1, Ok index)
+
         Ok token ->
             debugStr =
                 Lexer.debugPrintToken [] p0.bytes token
@@ -355,6 +369,12 @@ debugPrintNode = \buf, nodes, index ->
 
         Ident ident ->
             Str.concat buf ident
+
+        True ->
+            Str.concat buf "true"
+
+        False ->
+            Str.concat buf "false"
 
         Int int ->
             Str.concat buf (Num.toStr int)
@@ -622,6 +642,26 @@ expect
         ((5 > 4) == (3 < 4));
         ((5 < 4) != (3 > 4));
         ((3 + (4 * 5)) == ((3 * 1) + (4 * 5)));
+
+        """
+    out == expected
+
+expect
+    input =
+        """
+        true;
+        false;
+        3 > 5 == false
+        3 < 5 == true
+        """
+    out = formatedOutput input
+
+    expected =
+        """
+        true;
+        false;
+        ((3 > 5) == false);
+        ((3 < 5) == true);
 
         """
     out == expected
