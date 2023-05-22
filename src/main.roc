@@ -1,6 +1,6 @@
 app "🐵🤘🏼"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
-    imports [pf.Arg, pf.File, pf.Path, pf.Process, pf.Stderr, pf.Task]
+    imports [pf.Arg, pf.File, pf.Path, pf.Process, pf.Stderr, pf.Stdout, pf.Task, Repl, Lexer]
     provides [main] to pf
 
 main =
@@ -10,12 +10,21 @@ main =
         when args is
             [_, monkeyFile] ->
                 path = Path.fromStr monkeyFile
-                _bytes <- File.readBytes path |> Task.await
-                # TODO: lex bytes.
-                Stderr.line "Need to lex: \(monkeyFile)"
+                bytes <- File.readBytes path |> Task.await
+                {} <- Stderr.line "Lexed file is:" |> Task.await
+
+                out =
+                    bytes
+                    |> Lexer.lex
+                    |> \tokens -> Lexer.debugPrint [] bytes tokens
+                    |> Str.fromUtf8
+                    |> Result.withDefault "Bad Utf8\n"
+                Stderr.write out
 
             _ ->
-                Task.fail NoFile
+                {} <- Stdout.line "Hello! This is the Monkey programming language!" |> Task.await
+                {} <- Stdout.line "Feel free to type in commands" |> Task.await
+                Repl.run
 
     result <- Task.attempt task
     when result is

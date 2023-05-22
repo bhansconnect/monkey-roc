@@ -1,5 +1,5 @@
 interface Lexer
-    exposes [lex]
+    exposes [lex, debugPrint, debugPrintToken, Token, Kind]
     imports []
 
 Kind : [
@@ -166,6 +166,67 @@ getIdent = \bytes, index ->
 getInt = \bytes, index ->
     len = intLength (List.drop bytes (Num.toNat index)) 1
     List.sublist bytes { start: Num.toNat index, len }
+
+debugPrint : List U8, List U8, List Token -> List U8
+debugPrint = \buf, bytes, tokens ->
+    List.walk tokens buf \b, token ->
+        debugPrintToken b bytes token
+        |> List.append '\n'
+
+debugPrintToken : List U8, List U8, Token -> List U8
+debugPrintToken = \buf, bytes, token ->
+    buf
+    |> List.concat (Str.toUtf8 "{ kind: ")
+    |> debugPrintKind token.kind
+    |> \b ->
+        when token.kind is
+            Ident ->
+                b
+                |> List.concat (Str.toUtf8 ", value: ")
+                |> List.concat (getIdent bytes token.index)
+
+            Int ->
+                b
+                |> List.concat (Str.toUtf8 ", value: ")
+                |> List.concat (getInt bytes token.index)
+
+            _ ->
+                b
+    |> List.concat (Str.toUtf8 " }")
+
+debugPrintKind : List U8, Kind -> List U8
+debugPrintKind = \buf, kind ->
+    out =
+        when kind is
+            Illegal -> "Illegal"
+            Eof -> "Eof"
+            Ident -> "Ident"
+            Int -> "Int"
+            Assign -> "Assign"
+            Plus -> "Plus"
+            Minus -> "Minus"
+            Bang -> "Bang"
+            Asterisk -> "Asterisk"
+            Slash -> "Slash"
+            Lt -> "Lt"
+            Gt -> "Gt"
+            Comma -> "Comma"
+            Semicolon -> "Semicolon"
+            LParen -> "LParen"
+            RParen -> "RParen"
+            LBrace -> "LBrace"
+            RBrace -> "RBrace"
+            Function -> "Function"
+            Let -> "Let"
+            True -> "True"
+            False -> "False"
+            If -> "If"
+            Else -> "Else"
+            Return -> "Return"
+            Eq -> "Eq"
+            NotEq -> "NotEq"
+
+    List.concat buf (Str.toUtf8 out)
 
 expect
     lexed = lex (Str.toUtf8 "") |> List.map .kind
