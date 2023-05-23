@@ -430,8 +430,8 @@ parseFnExpression = \p0 ->
                                 Err {} ->
                                     (p2, Err {})
 
-                        Ok _ ->
-                            (p1, Err {})
+                        Ok token ->
+                            (tokenMismatch p1 "LBrace" token, Err {})
 
                         Err _ ->
                             eofCrash {}
@@ -439,8 +439,8 @@ parseFnExpression = \p0 ->
                 Err {} ->
                     (p1, Err {})
 
-        Ok _ ->
-            (p0, Err {})
+        Ok token ->
+            (tokenMismatch p0 "LParen" token, Err {})
 
         Err _ ->
             eofCrash {}
@@ -510,11 +510,14 @@ parseIfExpression = \p0 ->
                                 Err {} ->
                                     (p2, Err {})
 
-                        [{ kind: RParen }, ..] ->
-                            (advanceTokens p1 1, Err {})
+                        [{ kind: RParen }, token, ..] ->
+                            p1
+                            |> advanceTokens 1
+                            |> tokenMismatch "LBrace" token
+                            |> \p2 -> (p2, Err {})
 
-                        [_, ..] ->
-                            (p1, Err {})
+                        [token, ..] ->
+                            (tokenMismatch p1 "RParen" token, Err {})
 
                         [] ->
                             eofCrash {}
@@ -522,8 +525,8 @@ parseIfExpression = \p0 ->
                 Err {} ->
                     (p1, Err {})
 
-        Ok _ ->
-            (p0, Err {})
+        Ok token ->
+            (tokenMismatch p0 "LParen" token, Err {})
 
         Err _ ->
             eofCrash {}

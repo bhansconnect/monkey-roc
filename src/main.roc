@@ -1,6 +1,6 @@
 app "🐵🤘🏼"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
-    imports [pf.Arg, pf.File, pf.Path, pf.Process, pf.Stderr, pf.Stdout, pf.Task, Repl, Lexer]
+    imports [pf.Arg, pf.File, pf.Path, pf.Process, pf.Stderr, pf.Stdout, pf.Task, Repl, Lexer, Parser]
     provides [main] to pf
 
 main =
@@ -11,15 +11,22 @@ main =
             [_, monkeyFile] ->
                 path = Path.fromStr monkeyFile
                 bytes <- File.readBytes path |> Task.await
-                {} <- Stderr.line "Lexed file is:" |> Task.await
+                {} <- Stderr.line "Parsed and formatted file is:\n" |> Task.await
 
-                out =
+                parseResults =
                     bytes
                     |> Lexer.lex
-                    |> \lexedData -> Lexer.debugPrint [] lexedData
-                    |> Str.fromUtf8
-                    |> Result.withDefault "Bad Utf8\n"
-                Stderr.write out
+                    |> Parser.parse
+
+                when parseResults is
+                    Ok parsedData ->
+                        Stderr.line (Parser.debugPrint "" parsedData)
+
+                    Err errs ->
+                        errs
+                        |> Str.joinWith "\n\t"
+                        |> \e -> "Parse Errors:\n\t\(e)"
+                        |> Stderr.line
 
             _ ->
                 {} <- Stdout.line "Hello! This is the Monkey programming language!" |> Task.await
