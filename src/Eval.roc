@@ -130,7 +130,32 @@ evalNode = \e0, index ->
             (e2, rhsVal) = evalNode e1 rhs
             (e2, (lhsVal != rhsVal) |> boolToValue)
 
+        If { cond, consequence } ->
+            (e1, condVal) = evalNode e0 cond
+            if isTruthy condVal then
+                evalNode e1 consequence
+            else
+                (e1, Null)
+
+        IfElse { cond, consequence, alternative } ->
+            (e1, condVal) = evalNode e0 cond
+            if isTruthy condVal then
+                evalNode e1 consequence
+            else
+                evalNode e1 alternative
+
+        Block statements ->
+            evalStatements e0 statements
+
         _ -> crash "not implemented yet"
+
+isTruthy : Value -> Bool
+isTruthy = \val ->
+    when val is
+        True -> Bool.true
+        False -> Bool.false
+        Null -> Bool.false
+        _ -> Bool.true
 
 loadOrCrash : Evaluator, Index -> Node
 loadOrCrash = \{ nodes }, i ->
@@ -234,5 +259,28 @@ expect
         False,
         False,
         True,
+    ]
+    out == expected
+
+expect
+    inputs = [
+        "if (true) { 10 }",
+        "if (false) { 10 }",
+        "if (1) { 10 }",
+        "if (1 < 2) { 10 }",
+        "if (1 > 2) { 10 }",
+        "if (1 < 2) { 10 } else { 20 }",
+        "if (1 > 2) { 10 } else { 20 }",
+    ]
+    out = List.map inputs runFromSource
+
+    expected = [
+        Int 10,
+        Null,
+        Int 10,
+        Int 10,
+        Null,
+        Int 10,
+        Int 20,
     ]
     out == expected
