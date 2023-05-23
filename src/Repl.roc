@@ -1,6 +1,6 @@
 interface Repl
     exposes [run]
-    imports [pf.Stdout, pf.Stdin, pf.Task, Lexer, Parser]
+    imports [pf.Stdout, pf.Stdin, pf.Task, Lexer, Parser, Eval]
 
 run =
     {} <- Task.loop {}
@@ -17,8 +17,10 @@ run =
     outputTask =
         when parseResults is
             Ok parsedData ->
-                {} <- Stdout.line "Parsed and formated:\n" |> Task.await
-                Stdout.line (Parser.debugPrint "" parsedData)
+                parsedData
+                |> Eval.eval
+                |> Eval.printValue
+                |> Stdout.line
 
             Err errs ->
                 errs

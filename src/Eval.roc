@@ -1,5 +1,5 @@
 interface Eval
-    exposes [eval]
+    exposes [eval, printValue]
     imports [Lexer, Parser.{ Index, Node, ParsedData }]
 
 Value : [
@@ -8,6 +8,14 @@ Value : [
     False,
     Null,
 ]
+
+printValue : Value -> Str
+printValue = \value ->
+    when value is
+        Int int -> Num.toStr int
+        True -> "true"
+        False -> "false"
+        Null -> "nul"
 
 Evaluator : {
     nodes : List Node,

@@ -1,6 +1,6 @@
 app "🐵🤘🏼"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
-    imports [pf.Arg, pf.File, pf.Path, pf.Process, pf.Stderr, pf.Stdout, pf.Task, Repl, Lexer, Parser]
+    imports [pf.Arg, pf.File, pf.Path, pf.Process, pf.Stderr, pf.Stdout, pf.Task, Repl, Lexer, Parser, Eval]
     provides [main] to pf
 
 main =
@@ -20,7 +20,10 @@ main =
 
                 when parseResults is
                     Ok parsedData ->
-                        Stderr.line (Parser.debugPrint "" parsedData)
+                        parsedData
+                        |> Eval.eval
+                        |> Eval.printValue
+                        |> Stdout.line
 
                     Err errs ->
                         errs
