@@ -21,12 +21,14 @@ Program : List Index
 # One thing we lose with this current setup in roc is knowledge around the nested tag type.
 # Even thouhg let must contain an Ident, Roc will force us to check the tag to extra the ident.
 Node : [
+    Fn { params : Index, body : Index },
     If { cond : Index, consequence : Index },
     IfElse { cond : Index, consequence : Index, alternative : Index },
     Block (List Index),
     Let { ident : Index, expr : Index },
     Return { expr : Index },
     Ident Str,
+    IdentList (List Str),
     Int U64,
     True,
     False,
@@ -333,6 +335,9 @@ parsePrefix = \p0 ->
         Ok { kind: If, index: _ } ->
             parseIfExpression (advanceTokens p0 1)
 
+        Ok { kind: Function, index: _ } ->
+            parseFnExpression (advanceTokens p0 1)
+
         Ok token ->
             debugStr =
                 Lexer.debugPrintToken [] p0.bytes token
@@ -345,6 +350,69 @@ parsePrefix = \p0 ->
             |> \p1 -> (p1, Err {})
 
         Err _ ->
+            eofCrash {}
+
+parseFnExpression : Parser -> (Parser, Result Index {})
+parseFnExpression = \p0 ->
+    when List.first p0.remainingTokens is
+        Ok { kind: LParen } ->
+            (p1, paramsRes) = parseFnParams (advanceTokens p0 1) []
+            when paramsRes is
+                Ok paramsIndex ->
+                    when List.first p1.remainingTokens is
+                        Ok { kind: LBrace } ->
+                            (p2, bodyRes) = parseBlock (advanceTokens p1 1) []
+                            when bodyRes is
+                                Ok bodyIndex ->
+                                    (p3, fnIndex) = addNode p2 (Fn { params: paramsIndex, body: bodyIndex })
+                                    (p3, Ok fnIndex)
+
+                                Err {} ->
+                                    (p2, Err {})
+
+                        Ok _ ->
+                            (p1, Err {})
+
+                        Err _ ->
+                            eofCrash {}
+
+                Err {} ->
+                    (p1, Err {})
+
+        Ok _ ->
+            (p0, Err {})
+
+        Err _ ->
+            eofCrash {}
+
+parseFnParams : Parser, List Str -> (Parser, Result Index {})
+parseFnParams = \p0, idents ->
+    when p0.remainingTokens is
+        [{ kind: Ident, index: byteIndex }, { kind: Comma }, ..] ->
+            ident =
+                Lexer.getIdent p0.bytes byteIndex
+                |> Str.fromUtf8
+                |> okOrUnreachable "Ident is not valid utf8"
+            parseFnParams (advanceTokens p0 2) (List.append idents ident)
+
+        [{ kind: Ident, index: byteIndex }, { kind: RParen }, ..] ->
+            ident =
+                Lexer.getIdent p0.bytes byteIndex
+                |> Str.fromUtf8
+                |> okOrUnreachable "Ident is not valid utf8"
+            (p1, index) = addNode (advanceTokens p0 2) (IdentList (List.append idents ident))
+            (p1, Ok index)
+
+        [{ kind: RParen }, ..] ->
+            (p1, index) = addNode (advanceTokens p0 1) (IdentList idents)
+            (p1, Ok index)
+
+        [token, ..] ->
+            p0
+            |> tokenMismatch "Ident" token
+            |> \p1 -> (p1, Err {})
+
+        [] ->
             eofCrash {}
 
 # TODO: Add some sort of wrapper and backpassing or similar to avoid all the nesting here and in similar functions.
@@ -463,6 +531,13 @@ debugPrintNode = \buf, nodes, index, spaces ->
             Err _ -> crash "node index out of bounds"
 
     when node is
+        Fn { params, body } ->
+            buf
+            |> Str.concat "fn"
+            |> debugPrintNode nodes params spaces
+            |> Str.concat " "
+            |> debugPrintNode nodes body spaces
+
         If { cond, consequence } ->
             buf
             |> Str.concat "if "
@@ -497,6 +572,15 @@ debugPrintNode = \buf, nodes, index, spaces ->
             buf
             |> Str.concat "return "
             |> debugPrintNode nodes expr spaces
+
+        IdentList idents ->
+            buf
+            |> Str.concat "("
+            |> \b ->
+                idents
+                |> List.intersperse ", "
+                |> List.walk b Str.concat
+            |> Str.concat ")"
 
         Ident ident ->
             Str.concat buf ident
@@ -844,6 +928,29 @@ expect
             x;
         } else {
             y;
+        };
+
+        """
+    out == expected
+
+expect
+    input =
+        """
+        fn() { }
+        fn(x) { x }
+        fn(x, y, z) { x + y + z }
+        """
+    out = formatedOutput input
+
+    expected =
+        """
+        fn() {
+        };
+        fn(x) {
+            x;
+        };
+        fn(x, y, z) {
+            ((x + y) + z);
         };
 
         """
