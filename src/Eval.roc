@@ -9,6 +9,13 @@ Value : [
     Null,
 ]
 
+boolToValue : Bool -> Value
+boolToValue = \bool ->
+    if bool then
+        True
+    else
+        False
+
 printValue : Value -> Str
 printValue = \value ->
     when value is
@@ -93,6 +100,36 @@ evalNode = \e0, index ->
                 _ ->
                     (e2, Null)
 
+        Lt { lhs, rhs } ->
+            (e1, lhsVal) = evalNode e0 lhs
+            (e2, rhsVal) = evalNode e1 rhs
+            when (lhsVal, rhsVal) is
+                (Int lhsInt, Int rhsInt) ->
+                    (e2, (lhsInt < rhsInt) |> boolToValue)
+
+                _ ->
+                    (e2, Null)
+
+        Gt { lhs, rhs } ->
+            (e1, lhsVal) = evalNode e0 lhs
+            (e2, rhsVal) = evalNode e1 rhs
+            when (lhsVal, rhsVal) is
+                (Int lhsInt, Int rhsInt) ->
+                    (e2, (lhsInt > rhsInt) |> boolToValue)
+
+                _ ->
+                    (e2, Null)
+
+        Eq { lhs, rhs } ->
+            (e1, lhsVal) = evalNode e0 lhs
+            (e2, rhsVal) = evalNode e1 rhs
+            (e2, (lhsVal == rhsVal) |> boolToValue)
+
+        NotEq { lhs, rhs } ->
+            (e1, lhsVal) = evalNode e0 lhs
+            (e2, rhsVal) = evalNode e1 rhs
+            (e2, (lhsVal != rhsVal) |> boolToValue)
+
         _ -> crash "not implemented yet"
 
 loadOrCrash : Evaluator, Index -> Node
@@ -170,5 +207,32 @@ expect
         Int 37,
         Int 37,
         Int 50,
+    ]
+    out == expected
+
+expect
+    inputs = [
+        "true == true",
+        "false == false",
+        "true == false",
+        "true != false",
+        "false != true",
+        "(1 < 2) == true",
+        "(1 < 2) == false",
+        "(1 > 2) == true",
+        "(1 > 2) == false",
+    ]
+    out = List.map inputs runFromSource
+
+    expected = [
+        True,
+        True,
+        False,
+        True,
+        True,
+        True,
+        False,
+        False,
+        True,
     ]
     out == expected
