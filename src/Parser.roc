@@ -25,6 +25,8 @@ Node : [
     If { cond : Index, consequence : Index },
     IfElse { cond : Index, consequence : Index, alternative : Index },
     Block (List Index),
+    Call { fn : Index, args : Index },
+    CallArgs (List Index),
     Let { ident : Index, expr : Index },
     Return { expr : Index },
     Ident Str,
@@ -203,35 +205,92 @@ parseInfix : Parser, Index, Precedence -> (Parser, Result Index {})
 parseInfix = \p0, lhsIndex, @Precedence basePrecedence ->
     (@Precedence nextPrecedence) = peekPrecedence p0
     if basePrecedence < nextPrecedence then
-        # parse actual infix
-        binOpRes =
-            when List.first p0.remainingTokens is
-                Ok { kind: Eq } -> Ok Eq
-                Ok { kind: NotEq } -> Ok NotEq
-                Ok { kind: Lt } -> Ok Lt
-                Ok { kind: Gt } -> Ok Gt
-                Ok { kind: Plus } -> Ok Plus
-                Ok { kind: Minus } -> Ok Minus
-                Ok { kind: Asterisk } -> Ok Product
-                Ok { kind: Slash } -> Ok Div
-                Ok _ -> Err NotInfix
-                Err _ -> eofCrash {}
-
-        when binOpRes is
-            Ok binOp ->
-                (p1, rhsRes) = parseExpression (advanceTokens p0 1) (@Precedence nextPrecedence)
-                when rhsRes is
-                    Ok rhsIndex ->
-                        (p2, binIndex) = addNode p1 (binOp { lhs: lhsIndex, rhs: rhsIndex })
-                        parseInfix p2 binIndex (@Precedence basePrecedence)
+        when List.first p0.remainingTokens is
+            Ok { kind: LParen } ->
+                (p1, argsRes) = parseCallArgs (advanceTokens p0 1)
+                when argsRes is
+                    Ok argsIndex ->
+                        (p2, callIndex) = addNode p1 (Call { fn: lhsIndex, args: argsIndex })
+                        parseInfix p2 callIndex (@Precedence basePrecedence)
 
                     Err {} ->
                         (p1, Err {})
 
-            Err NotInfix ->
-                (p0, Ok lhsIndex)
+            Ok token ->
+                # parse standard infix
+                binOpRes =
+                    when token.kind is
+                        Eq -> Ok Eq
+                        NotEq -> Ok NotEq
+                        Lt -> Ok Lt
+                        Gt -> Ok Gt
+                        Plus -> Ok Plus
+                        Minus -> Ok Minus
+                        Asterisk -> Ok Product
+                        Slash -> Ok Div
+                        _ -> Err NotInfix
+
+                when binOpRes is
+                    Ok binOp ->
+                        (p1, rhsRes) = parseExpression (advanceTokens p0 1) (@Precedence nextPrecedence)
+                        when rhsRes is
+                            Ok rhsIndex ->
+                                (p2, binIndex) = addNode p1 (binOp { lhs: lhsIndex, rhs: rhsIndex })
+                                parseInfix p2 binIndex (@Precedence basePrecedence)
+
+                            Err {} ->
+                                (p1, Err {})
+
+                    Err NotInfix ->
+                        (p0, Ok lhsIndex)
+
+            Err _ -> eofCrash {}
     else
         (p0, Ok lhsIndex)
+
+parseCallArgs : Parser -> (Parser, Result Index {})
+parseCallArgs = \p0 ->
+    when List.first p0.remainingTokens is
+        Ok { kind: RParen } ->
+            (p1, index) = addNode (advanceTokens p0 1) (CallArgs [])
+            (p1, Ok index)
+
+        Ok _ ->
+            (p1, argRes) = parseExpression p0 precLowest
+            when argRes is
+                Ok argIndex ->
+                    parseCallArgsHelper p1 [argIndex]
+
+                Err {} ->
+                    (p1, Err {})
+
+        Err _ ->
+            eofCrash {}
+
+parseCallArgsHelper : Parser, List Index -> (Parser, Result Index {})
+parseCallArgsHelper = \p0, args ->
+    when List.first p0.remainingTokens is
+        Ok { kind: RParen } ->
+            (p1, index) = addNode (advanceTokens p0 1) (CallArgs args)
+            (p1, Ok index)
+
+        Ok { kind: Comma } ->
+            (p1, argRes) = parseExpression (advanceTokens p0 1) precLowest
+            when argRes is
+                Ok argIndex ->
+                    parseCallArgsHelper p1 (List.append args argIndex)
+
+                Err {} ->
+                    (p1, Err {})
+
+        Ok token ->
+            p0
+            |> advanceTokens 1
+            |> tokenMismatch "RParen or Comma" token
+            |> \p1 -> (p1, Err {})
+
+        Err _ ->
+            eofCrash {}
 
 peekPrecedence : Parser -> Precedence
 peekPrecedence = \p0 ->
@@ -244,6 +303,7 @@ peekPrecedence = \p0 ->
         Ok { kind: Minus } -> precSum
         Ok { kind: Asterisk } -> precProduct
         Ok { kind: Slash } -> precProduct
+        Ok { kind: LParen } -> precCall
         Ok _ -> precLowest
         Err _ -> eofCrash {}
 
@@ -531,6 +591,21 @@ debugPrintNode = \buf, nodes, index, spaces ->
             Err _ -> crash "node index out of bounds"
 
     when node is
+        Call { fn, args } ->
+            buf
+            |> debugPrintNode nodes fn spaces
+            |> debugPrintNode nodes args spaces
+
+        CallArgs args ->
+            buf
+            |> Str.concat "("
+            |> \b ->
+                args
+                |> List.map \argIndex -> debugPrintNode "" nodes argIndex spaces
+                |> List.intersperse ", "
+                |> List.walk b Str.concat
+            |> Str.concat ")"
+
         Fn { params, body } ->
             buf
             |> Str.concat "fn"
@@ -884,7 +959,7 @@ expect
 expect
     input =
         """
-        1 + (2 + 3) + 4
+        1 + (2 + 3) + 4;
         (5 + 5) * 2
         2 / (5 + 5);
         -(5 + 5)
@@ -952,6 +1027,24 @@ expect
         fn(x, y, z) {
             ((x + y) + z);
         };
+
+        """
+    out == expected
+
+expect
+    input =
+        """
+        a + add(b * c) + d
+        add(a, b, 1, 2 * 3, 4 + 5, add(6, 7 * 8))
+        add(a + b + c * d / f + g)
+        """
+    out = formatedOutput input
+
+    expected =
+        """
+        ((a + add((b * c))) + d);
+        add(a, b, 1, (2 * 3), (4 + 5), add(6, (7 * 8)));
+        add((((a + b) + ((c * d) / f)) + g));
 
         """
     out == expected
