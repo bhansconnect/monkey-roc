@@ -7,6 +7,12 @@ Value : [
     True,
     False,
     Null,
+
+    # Values that need to be propogated up and returned.
+    RetInt I64,
+    RetTrue,
+    RetFalse,
+    RetNull,
 ]
 
 boolToValue : Bool -> Value
@@ -23,6 +29,7 @@ printValue = \value ->
         True -> "true"
         False -> "false"
         Null -> "null"
+        _ -> "Invalid ret value"
 
 Evaluator : {
     nodes : List Node,
@@ -31,13 +38,36 @@ Evaluator : {
 eval : ParsedData -> Value
 eval = \{ program, nodes } ->
     e0 = { nodes }
-    (_, out) = evalStatements e0 program
+    (_, out) = evalProgram e0 program
     out
 
-evalStatements : Evaluator, List Index -> (Evaluator, Value)
-evalStatements = \e0, statements ->
-    List.walk statements (e0, Null) \(e1, _), index ->
-        evalNode e1 index
+evalProgram : Evaluator, List Index -> (Evaluator, Value)
+evalProgram = \e0, statements ->
+    List.walkUntil statements (e0, Null) \(e1, _), index ->
+        (e2, val) = evalNode e1 index
+        when val is
+            RetInt int -> Break (e2, Int int)
+            RetTrue -> Break (e2, True)
+            RetFalse -> Break (e2, False)
+            RetNull -> Break (e2, Null)
+            Int int -> Continue (e2, Int int)
+            True -> Continue (e2, True)
+            False -> Continue (e2, False)
+            Null -> Continue (e2, Null)
+
+evalBlock : Evaluator, List Index -> (Evaluator, Value)
+evalBlock = \e0, statements ->
+    List.walkUntil statements (e0, Null) \(e1, _), index ->
+        (e2, val) = evalNode e1 index
+        when val is
+            RetInt int -> Break (e2, RetInt int)
+            RetTrue -> Break (e2, RetTrue)
+            RetFalse -> Break (e2, RetFalse)
+            RetNull -> Break (e2, RetNull)
+            Int int -> Continue (e2, Int int)
+            True -> Continue (e2, True)
+            False -> Continue (e2, False)
+            Null -> Continue (e2, Null)
 
 evalNode : Evaluator, Index -> (Evaluator, Value)
 evalNode = \e0, index ->
@@ -52,7 +82,8 @@ evalNode = \e0, index ->
                 True -> (e1, False)
                 False -> (e1, True)
                 Null -> (e1, True)
-                _ -> (e1, False)
+                Int _ -> (e1, False)
+                _ -> (e1, Null)
 
         Negate { expr } ->
             (e1, val) = evalNode e0 expr
@@ -145,7 +176,16 @@ evalNode = \e0, index ->
                 evalNode e1 alternative
 
         Block statements ->
-            evalStatements e0 statements
+            evalBlock e0 statements
+
+        Return { expr } ->
+            (e1, exprVal) = evalNode e0 expr
+            when exprVal is
+                Int int -> (e1, RetInt int)
+                True -> (e1, RetTrue)
+                False -> (e1, RetFalse)
+                Null -> (e1, RetNull)
+                _ -> (e1, Null)
 
         _ -> crash "not implemented yet"
 
@@ -155,7 +195,8 @@ isTruthy = \val ->
         True -> Bool.true
         False -> Bool.false
         Null -> Bool.false
-        _ -> Bool.true
+        Int _ -> Bool.true
+        _ -> crash "ret values are not truthy"
 
 loadOrCrash : Evaluator, Index -> Node
 loadOrCrash = \{ nodes }, i ->
@@ -282,5 +323,24 @@ expect
         Null,
         Int 10,
         Int 20,
+    ]
+    out == expected
+
+expect
+    inputs = [
+        "return 10;",
+        "return 10; 9",
+        "return 2 * 5; 9",
+        "9; return 10; 9",
+        "if (10 > 1) { if (10 > 1) { return 10; } return 1; }",
+    ]
+    out = List.map inputs runFromSource
+
+    expected = [
+        Int 10,
+        Int 10,
+        Int 10,
+        Int 10,
+        Int 10,
     ]
     out == expected
