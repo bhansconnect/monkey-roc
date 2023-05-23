@@ -13,7 +13,24 @@ Value : [
     RetTrue,
     RetFalse,
     RetNull,
+
+    # Errors are just strings.
+    # They are boxed to not bloat Value.
+    # TODO: Boxing here breaks tests if run.
+    # It works fine in repl, so I guess this is just not testable for now.
+    Error (Box Str),
 ]
+
+makeError : Str -> Value
+makeError = \str -> Error (Box.box str)
+
+valueToType : Value -> Str
+valueToType = \val ->
+    when val is
+        Int _ -> "INTEGER"
+        True | False -> "BOOLEAN"
+        Null -> "NULL"
+        _ -> crash "value has no type"
 
 boolToValue : Bool -> Value
 boolToValue = \bool ->
@@ -29,6 +46,7 @@ printValue = \value ->
         True -> "true"
         False -> "false"
         Null -> "null"
+        Error boxedStr -> Str.concat "ERROR: " (Box.unbox boxedStr)
         _ -> "Invalid ret value"
 
 Evaluator : {
@@ -50,6 +68,7 @@ evalProgram = \e0, statements ->
             RetTrue -> Break (e2, True)
             RetFalse -> Break (e2, False)
             RetNull -> Break (e2, Null)
+            Error e -> Break (e2, Error e)
             Int int -> Continue (e2, Int int)
             True -> Continue (e2, True)
             False -> Continue (e2, False)
@@ -64,6 +83,7 @@ evalBlock = \e0, statements ->
             RetTrue -> Break (e2, RetTrue)
             RetFalse -> Break (e2, RetFalse)
             RetNull -> Break (e2, RetNull)
+            Error e -> Break (e2, Error e)
             Int int -> Continue (e2, Int int)
             True -> Continue (e2, True)
             False -> Continue (e2, False)
@@ -83,13 +103,17 @@ evalNode = \e0, index ->
                 False -> (e1, True)
                 Null -> (e1, True)
                 Int _ -> (e1, False)
+                Error e -> (e1, Error e)
                 _ -> (e1, Null)
 
         Negate { expr } ->
             (e1, val) = evalNode e0 expr
             when val is
                 Int int -> (e1, Int -int)
-                _ -> (e1, Null)
+                Error e -> (e1, Error e)
+                _ ->
+                    type = valueToType val
+                    (e1, makeError "unknown operator: -\(type)")
 
         Plus { lhs, rhs } ->
             (e1, lhsVal) = evalNode e0 lhs
@@ -98,8 +122,11 @@ evalNode = \e0, index ->
                 (Int lhsInt, Int rhsInt) ->
                     (e2, Int (lhsInt + rhsInt))
 
+                (_, Error e) | (Error e, _) ->
+                    (e2, Error e)
+
                 _ ->
-                    (e2, Null)
+                    (e2, infixError "+" lhsVal rhsVal)
 
         Minus { lhs, rhs } ->
             (e1, lhsVal) = evalNode e0 lhs
@@ -108,8 +135,11 @@ evalNode = \e0, index ->
                 (Int lhsInt, Int rhsInt) ->
                     (e2, Int (lhsInt - rhsInt))
 
+                (_, Error e) | (Error e, _) ->
+                    (e2, Error e)
+
                 _ ->
-                    (e2, Null)
+                    (e2, infixError "-" lhsVal rhsVal)
 
         Product { lhs, rhs } ->
             (e1, lhsVal) = evalNode e0 lhs
@@ -118,8 +148,11 @@ evalNode = \e0, index ->
                 (Int lhsInt, Int rhsInt) ->
                     (e2, Int (lhsInt * rhsInt))
 
+                (_, Error e) | (Error e, _) ->
+                    (e2, Error e)
+
                 _ ->
-                    (e2, Null)
+                    (e2, infixError "*" lhsVal rhsVal)
 
         Div { lhs, rhs } ->
             (e1, lhsVal) = evalNode e0 lhs
@@ -128,8 +161,11 @@ evalNode = \e0, index ->
                 (Int lhsInt, Int rhsInt) ->
                     (e2, Int (lhsInt // rhsInt))
 
+                (_, Error e) | (Error e, _) ->
+                    (e2, Error e)
+
                 _ ->
-                    (e2, Null)
+                    (e2, infixError "/" lhsVal rhsVal)
 
         Lt { lhs, rhs } ->
             (e1, lhsVal) = evalNode e0 lhs
@@ -138,8 +174,11 @@ evalNode = \e0, index ->
                 (Int lhsInt, Int rhsInt) ->
                     (e2, (lhsInt < rhsInt) |> boolToValue)
 
+                (_, Error e) | (Error e, _) ->
+                    (e2, Error e)
+
                 _ ->
-                    (e2, Null)
+                    (e2, infixError "<" lhsVal rhsVal)
 
         Gt { lhs, rhs } ->
             (e1, lhsVal) = evalNode e0 lhs
@@ -148,8 +187,11 @@ evalNode = \e0, index ->
                 (Int lhsInt, Int rhsInt) ->
                     (e2, (lhsInt > rhsInt) |> boolToValue)
 
+                (_, Error e) | (Error e, _) ->
+                    (e2, Error e)
+
                 _ ->
-                    (e2, Null)
+                    (e2, infixError ">" lhsVal rhsVal)
 
         Eq { lhs, rhs } ->
             (e1, lhsVal) = evalNode e0 lhs
@@ -163,17 +205,23 @@ evalNode = \e0, index ->
 
         If { cond, consequence } ->
             (e1, condVal) = evalNode e0 cond
-            if isTruthy condVal then
-                evalNode e1 consequence
-            else
-                (e1, Null)
+            when condVal is
+                Error e -> (e1, Error e)
+                _ ->
+                    if isTruthy condVal then
+                        evalNode e1 consequence
+                    else
+                        (e1, Null)
 
         IfElse { cond, consequence, alternative } ->
             (e1, condVal) = evalNode e0 cond
-            if isTruthy condVal then
-                evalNode e1 consequence
-            else
-                evalNode e1 alternative
+            when condVal is
+                Error e -> (e1, Error e)
+                _ ->
+                    if isTruthy condVal then
+                        evalNode e1 consequence
+                    else
+                        evalNode e1 alternative
 
         Block statements ->
             evalBlock e0 statements
@@ -185,9 +233,19 @@ evalNode = \e0, index ->
                 True -> (e1, RetTrue)
                 False -> (e1, RetFalse)
                 Null -> (e1, RetNull)
+                Error e -> (e1, Error e)
                 _ -> (e1, Null)
 
         _ -> crash "not implemented yet"
+
+infixError : Str, Value, Value -> Value
+infixError = \op, lhs, rhs ->
+    lhsType = valueToType lhs
+    rhsType = valueToType rhs
+    if lhsType != rhsType then
+        makeError "type mismatch: \(lhsType) \(op) \(rhsType)"
+    else
+        makeError "unknown operator: \(lhsType) \(op) \(rhsType)"
 
 isTruthy : Value -> Bool
 isTruthy = \val ->

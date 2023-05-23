@@ -1,5 +1,5 @@
 interface Parser
-    exposes [parse, debugPrint]
+    exposes [parse, debugPrint, ParsedData, Index, Node]
     imports [Lexer.{ LexedData }]
 
 Index : U32
