@@ -15,12 +15,17 @@ Program : List Index
 # The Monkey interpreter in the book does not track this info.
 # Neither will we, at least for now.
 # This structure is more setup for execution speed.
+# In the end, I decided to go with limiting this struct to 3 U64s worth of storage.
+# This is a bit a laziness and a bit of avoiding bloat.
+# This enables storing a List or Str directly in a node if it is the only value in a node.
+# One thing we lose with this current setup in roc is knowledge around the nested tag type.
+# Even thouhg let must contain an Ident, Roc will force us to check the tag to extra the ident.
 Node : [
+    If { cond : Index, consequence : Index },
+    IfElse { cond : Index, consequence : Index, alternative : Index },
+    Block (List Index),
     Let { ident : Index, expr : Index },
     Return { expr : Index },
-
-    # TODO: is it worth directly adding the Str to node? Maybe it should be boxed or in a side list?
-    # The Str takes up 24 bytes and makes Node a less dense union overall.
     Ident Str,
     Int U64,
     True,
@@ -91,17 +96,7 @@ parseProgram = \p0, program ->
                 Err p0.errors
 
         Ok token ->
-            (p1, statement) =
-                when token.kind is
-                    Let ->
-                        parseLetStatement (advanceTokens p0 1)
-
-                    Return ->
-                        parseReturnStatement (advanceTokens p0 1)
-
-                    _ ->
-                        parseExpressionStatement p0
-
+            (p1, statement) = parseStatement p0 token
             when statement is
                 Ok index ->
                     parseProgram p1 (List.append program index)
@@ -111,6 +106,18 @@ parseProgram = \p0, program ->
 
         Err _ ->
             eofCrash {}
+
+parseStatement : Parser, Lexer.Token -> (Parser, Result Index {})
+parseStatement = \p0, token ->
+    when token.kind is
+        Let ->
+            parseLetStatement (advanceTokens p0 1)
+
+        Return ->
+            parseReturnStatement (advanceTokens p0 1)
+
+        _ ->
+            parseExpressionStatement p0
 
 parseLetStatement : Parser -> (Parser, Result Index {})
 parseLetStatement = \p0 ->
@@ -323,6 +330,9 @@ parsePrefix = \p0 ->
             |> addNode False
             |> \(p1, index) -> (p1, Ok index)
 
+        Ok { kind: If, index: _ } ->
+            parseIfExpression (advanceTokens p0 1)
+
         Ok token ->
             debugStr =
                 Lexer.debugPrintToken [] p0.bytes token
@@ -333,6 +343,63 @@ parsePrefix = \p0 ->
             |> advanceTokens 1
             |> addError "no prefix parse function for \(debugStr) found"
             |> \p1 -> (p1, Err {})
+
+        Err _ ->
+            eofCrash {}
+
+# TODO: Add some sort of wrapper and backpassing or similar to avoid all the nesting here and in similar functions.
+# This is just painfully deep.
+parseIfExpression : Parser -> (Parser, Result Index {})
+parseIfExpression = \p0 ->
+    when List.first p0.remainingTokens is
+        Ok { kind: LParen } ->
+            (p1, condRes) = parseExpression (advanceTokens p0 1) precLowest
+            when condRes is
+                Ok condIndex ->
+                    when p1.remainingTokens is
+                        [{ kind: RParen }, { kind: LBrace }, ..] ->
+                            (p2, consequenceRes) = parseBlock (advanceTokens p1 2) []
+                            when consequenceRes is
+                                Ok consequenceIndex ->
+                                    (p3, ifIndex) = addNode p2 (If { cond: condIndex, consequence: consequenceIndex })
+                                    (p3, Ok ifIndex)
+
+                                Err {} ->
+                                    (p2, Err {})
+
+                        [{ kind: RParen }, ..] ->
+                            (advanceTokens p1 1, Err {})
+
+                        [_, ..] ->
+                            (p1, Err {})
+
+                        [] ->
+                            eofCrash {}
+
+                Err {} ->
+                    (p1, Err {})
+
+        Ok _ ->
+            (p0, Err {})
+
+        Err _ ->
+            eofCrash {}
+
+parseBlock : Parser, List Index -> (Parser, Result Index {})
+parseBlock = \p0, statements ->
+    when List.first p0.remainingTokens is
+        Ok { kind: RBrace } ->
+            (p1, index) = addNode (advanceTokens p0 1) (Block statements)
+            (p1, Ok index)
+
+        Ok token ->
+            (p1, statement) = parseStatement p0 token
+            when statement is
+                Ok index ->
+                    parseBlock p1 (List.append statements index)
+
+                Err {} ->
+                    parseBlock p1 statements
 
         Err _ ->
             eofCrash {}
@@ -359,33 +426,62 @@ okOrUnreachable = \res, str ->
 
 debugPrint : Str, ParsedData -> Str
 debugPrint = \buf, { nodes, program } ->
-    List.walk program buf \b, index ->
-        debugPrintNodeStatement b nodes index
+    debugPrintIndented buf nodes program ""
 
-debugPrintNodeStatement : Str, List Node, Index -> Str
-debugPrintNodeStatement = \buf, nodes, index ->
-    debugPrintNode buf nodes index
+debugPrintIndented : Str, List Node, List Index, Str -> Str
+debugPrintIndented = \buf, nodes, program, spaces ->
+    List.walk program buf \b, index ->
+        debugPrintNodeStatement b nodes index spaces
+
+debugPrintNodeStatement : Str, List Node, Index, Str -> Str
+debugPrintNodeStatement = \buf, nodes, index, spaces ->
+    buf
+    |> Str.concat spaces
+    |> debugPrintNode nodes index spaces
     |> Str.concat ";\n"
 
-debugPrintNode : Str, List Node, Index -> Str
-debugPrintNode = \buf, nodes, index ->
+debugPrintNode : Str, List Node, Index, Str -> Str
+debugPrintNode = \buf, nodes, index, spaces ->
     node =
         when List.get nodes (Num.toNat index) is
             Ok v -> v
             Err _ -> crash "node index out of bounds"
 
     when node is
+        If { cond, consequence } ->
+            buf
+            |> Str.concat "if "
+            |> debugPrintNode nodes cond spaces
+            |> Str.concat " "
+            |> debugPrintNode nodes consequence spaces
+
+        IfElse { cond, consequence, alternative } ->
+            buf
+            |> Str.concat "if ("
+            |> debugPrintNode nodes cond spaces
+            |> Str.concat ") "
+            |> debugPrintNode nodes consequence spaces
+            |> Str.concat " else "
+            |> debugPrintNode nodes alternative spaces
+
+        Block statements ->
+            buf
+            |> Str.concat "{\n"
+            |> debugPrintIndented nodes statements (Str.concat spaces "    ")
+            |> Str.concat spaces
+            |> Str.concat "}"
+
         Let { ident, expr } ->
             buf
             |> Str.concat "let "
-            |> debugPrintNode nodes ident
+            |> debugPrintNode nodes ident spaces
             |> Str.concat " = "
-            |> debugPrintNode nodes expr
+            |> debugPrintNode nodes expr spaces
 
         Return { expr } ->
             buf
             |> Str.concat "return "
-            |> debugPrintNode nodes expr
+            |> debugPrintNode nodes expr spaces
 
         Ident ident ->
             Str.concat buf ident
@@ -402,77 +498,77 @@ debugPrintNode = \buf, nodes, index ->
         Not { expr } ->
             buf
             |> Str.concat "(!"
-            |> debugPrintNode nodes expr
+            |> debugPrintNode nodes expr spaces
             |> Str.concat ")"
 
         Negate { expr } ->
             buf
             |> Str.concat "(-"
-            |> debugPrintNode nodes expr
+            |> debugPrintNode nodes expr spaces
             |> Str.concat ")"
 
         Eq { lhs, rhs } ->
             buf
             |> Str.concat "("
-            |> debugPrintNode nodes lhs
+            |> debugPrintNode nodes lhs spaces
             |> Str.concat " == "
-            |> debugPrintNode nodes rhs
+            |> debugPrintNode nodes rhs spaces
             |> Str.concat ")"
 
         NotEq { lhs, rhs } ->
             buf
             |> Str.concat "("
-            |> debugPrintNode nodes lhs
+            |> debugPrintNode nodes lhs spaces
             |> Str.concat " != "
-            |> debugPrintNode nodes rhs
+            |> debugPrintNode nodes rhs spaces
             |> Str.concat ")"
 
         Lt { lhs, rhs } ->
             buf
             |> Str.concat "("
-            |> debugPrintNode nodes lhs
+            |> debugPrintNode nodes lhs spaces
             |> Str.concat " < "
-            |> debugPrintNode nodes rhs
+            |> debugPrintNode nodes rhs spaces
             |> Str.concat ")"
 
         Gt { lhs, rhs } ->
             buf
             |> Str.concat "("
-            |> debugPrintNode nodes lhs
+            |> debugPrintNode nodes lhs spaces
             |> Str.concat " > "
-            |> debugPrintNode nodes rhs
+            |> debugPrintNode nodes rhs spaces
             |> Str.concat ")"
 
         Plus { lhs, rhs } ->
             buf
             |> Str.concat "("
-            |> debugPrintNode nodes lhs
+            |> debugPrintNode nodes lhs spaces
             |> Str.concat " + "
-            |> debugPrintNode nodes rhs
+            |> debugPrintNode nodes rhs spaces
             |> Str.concat ")"
 
         Minus { lhs, rhs } ->
             buf
             |> Str.concat "("
-            |> debugPrintNode nodes lhs
+            |> debugPrintNode nodes lhs spaces
             |> Str.concat " - "
-            |> debugPrintNode nodes rhs
+            |> debugPrintNode nodes rhs spaces
             |> Str.concat ")"
 
         Product { lhs, rhs } ->
             buf
             |> Str.concat "("
-            |> debugPrintNode nodes lhs
+            |> debugPrintNode nodes lhs spaces
             |> Str.concat " * "
-            |> debugPrintNode nodes rhs
+            |> debugPrintNode nodes rhs spaces
             |> Str.concat ")"
 
         Div { lhs, rhs } ->
             buf
             |> Str.concat "("
-            |> debugPrintNode nodes lhs
+            |> debugPrintNode nodes lhs spaces
             |> Str.concat " / "
-            |> debugPrintNode nodes rhs
+            |> debugPrintNode nodes rhs spaces
             |> Str.concat ")"
 
 expect
@@ -704,6 +800,20 @@ expect
         (2 / (5 + 5));
         (-(5 + 5));
         (!(true == true));
+
+        """
+    out == expected
+
+expect
+    input =
+        "if (x < y) { x }"
+    out = formatedOutput input
+
+    expected =
+        """
+        if (x < y) {
+            x;
+        };
 
         """
     out == expected
