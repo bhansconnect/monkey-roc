@@ -15,7 +15,7 @@ printValue = \value ->
         Int int -> Num.toStr int
         True -> "true"
         False -> "false"
-        Null -> "nul"
+        Null -> "null"
 
 Evaluator : {
     nodes : List Node,
@@ -39,6 +39,20 @@ evalNode = \e0, index ->
         Int int -> (e0, Int int)
         True -> (e0, True)
         False -> (e0, False)
+        Not { expr } ->
+            (e1, val) = evalNode e0 expr
+            when val is
+                True -> (e1, False)
+                False -> (e1, True)
+                Null -> (e1, True)
+                _ -> (e1, False)
+
+        Negate { expr } ->
+            (e1, val) = evalNode e0 expr
+            when val is
+                Int int -> (e1, Int -int)
+                _ -> (e1, Null)
+
         _ -> crash "not implemented yet"
 
 loadOrCrash : Evaluator, Index -> Node
@@ -61,8 +75,29 @@ runFromSource = \input ->
     |> eval
 
 expect
-    inputs = ["5", "10", "true", "false"]
+    inputs = ["5", "10", "-5", "-10", "true", "false"]
     out = List.map inputs runFromSource
 
-    expected = [Int 5, Int 10, True, False]
+    expected = [Int 5, Int 10, Int -5, Int -10, True, False]
+    out == expected
+
+expect
+    inputs = [
+        "!true",
+        "!false",
+        "!5",
+        "!!true",
+        "!!false",
+        "!!5",
+    ]
+    out = List.map inputs runFromSource
+
+    expected = [
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+    ]
     out == expected
