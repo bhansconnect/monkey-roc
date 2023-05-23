@@ -361,8 +361,23 @@ parseIfExpression = \p0 ->
                             (p2, consequenceRes) = parseBlock (advanceTokens p1 2) []
                             when consequenceRes is
                                 Ok consequenceIndex ->
-                                    (p3, ifIndex) = addNode p2 (If { cond: condIndex, consequence: consequenceIndex })
-                                    (p3, Ok ifIndex)
+                                    when p2.remainingTokens is
+                                        [{ kind: Else }, { kind: LBrace }, ..] ->
+                                            (p3, alternativeRes) = parseBlock (advanceTokens p2 2) []
+                                            when alternativeRes is
+                                                Ok alternativeIndex ->
+                                                    (p4, ifElseIndex) = addNode p3 (IfElse { cond: condIndex, consequence: consequenceIndex, alternative: alternativeIndex })
+                                                    (p4, Ok ifElseIndex)
+
+                                                Err {} ->
+                                                    (p3, Err {})
+
+                                        [_, ..] ->
+                                            (p3, ifIndex) = addNode p2 (If { cond: condIndex, consequence: consequenceIndex })
+                                            (p3, Ok ifIndex)
+
+                                        [] ->
+                                            eofCrash {}
 
                                 Err {} ->
                                     (p2, Err {})
@@ -457,9 +472,9 @@ debugPrintNode = \buf, nodes, index, spaces ->
 
         IfElse { cond, consequence, alternative } ->
             buf
-            |> Str.concat "if ("
+            |> Str.concat "if "
             |> debugPrintNode nodes cond spaces
-            |> Str.concat ") "
+            |> Str.concat " "
             |> debugPrintNode nodes consequence spaces
             |> Str.concat " else "
             |> debugPrintNode nodes alternative spaces
@@ -813,6 +828,22 @@ expect
         """
         if (x < y) {
             x;
+        };
+
+        """
+    out == expected
+
+expect
+    input =
+        "if (x < y) { x } else { y }"
+    out = formatedOutput input
+
+    expected =
+        """
+        if (x < y) {
+            x;
+        } else {
+            y;
         };
 
         """
