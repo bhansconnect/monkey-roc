@@ -37,6 +37,8 @@ evalNode = \e0, index ->
     node = loadOrCrash e0 index
     when node is
         Int int -> (e0, Int int)
+        True -> (e0, True)
+        False -> (e0, False)
         _ -> crash "not implemented yet"
 
 loadOrCrash : Evaluator, Index -> Node
@@ -59,8 +61,8 @@ runFromSource = \input ->
     |> eval
 
 expect
-    inputs = ["5", "10"]
+    inputs = ["5", "10", "true", "false"]
     out = List.map inputs runFromSource
 
-    expected = [Int 5, Int 10]
+    expected = [Int 5, Int 10, True, False]
     out == expected
