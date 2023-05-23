@@ -31,7 +31,7 @@ Node : [
     Return { expr : Index },
     Ident Str,
     IdentList (List Str),
-    Int U64,
+    Int I64,
     True,
     False,
     Not { expr : Index },
@@ -327,7 +327,7 @@ parsePrefix = \p0 ->
                 |> Str.fromUtf8
                 |> okOrUnreachable "int is not valid utf8"
 
-            when Str.toU64 intStr is
+            when Str.toI64 intStr is
                 Ok int ->
                     p0
                     |> advanceTokens 1
