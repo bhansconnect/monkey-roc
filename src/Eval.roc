@@ -53,6 +53,46 @@ evalNode = \e0, index ->
                 Int int -> (e1, Int -int)
                 _ -> (e1, Null)
 
+        Plus { lhs, rhs } ->
+            (e1, lhsVal) = evalNode e0 lhs
+            (e2, rhsVal) = evalNode e1 rhs
+            when (lhsVal, rhsVal) is
+                (Int lhsInt, Int rhsInt) ->
+                    (e2, Int (lhsInt + rhsInt))
+
+                _ ->
+                    (e2, Null)
+
+        Minus { lhs, rhs } ->
+            (e1, lhsVal) = evalNode e0 lhs
+            (e2, rhsVal) = evalNode e1 rhs
+            when (lhsVal, rhsVal) is
+                (Int lhsInt, Int rhsInt) ->
+                    (e2, Int (lhsInt - rhsInt))
+
+                _ ->
+                    (e2, Null)
+
+        Product { lhs, rhs } ->
+            (e1, lhsVal) = evalNode e0 lhs
+            (e2, rhsVal) = evalNode e1 rhs
+            when (lhsVal, rhsVal) is
+                (Int lhsInt, Int rhsInt) ->
+                    (e2, Int (lhsInt * rhsInt))
+
+                _ ->
+                    (e2, Null)
+
+        Div { lhs, rhs } ->
+            (e1, lhsVal) = evalNode e0 lhs
+            (e2, rhsVal) = evalNode e1 rhs
+            when (lhsVal, rhsVal) is
+                (Int lhsInt, Int rhsInt) ->
+                    (e2, Int (lhsInt // rhsInt))
+
+                _ ->
+                    (e2, Null)
+
         _ -> crash "not implemented yet"
 
 loadOrCrash : Evaluator, Index -> Node
@@ -99,5 +139,36 @@ expect
         True,
         False,
         True,
+    ]
+    out == expected
+
+expect
+    inputs = [
+        "5 + 5 + 5 + 5 - 10",
+        "2 * 2 * 2 * 2 * 2",
+        "-50 + 100 + -50",
+        "5 * 2 + 10",
+        "5 + 2 * 10",
+        "20 + 2 * -10",
+        "50 / 2 * 2 + 10",
+        "2 * (5 + 10)",
+        "3 * 3 * 3 + 10",
+        "3 * (3 * 3) + 10",
+        "(5 + 10 * 2 + 15 / 3) * 2 + -10",
+    ]
+    out = List.map inputs runFromSource
+
+    expected = [
+        Int 10,
+        Int 32,
+        Int 0,
+        Int 20,
+        Int 25,
+        Int 0,
+        Int 60,
+        Int 30,
+        Int 37,
+        Int 37,
+        Int 50,
     ]
     out == expected
