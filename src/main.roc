@@ -22,6 +22,7 @@ main =
                     Ok parsedData ->
                         parsedData
                         |> Eval.eval
+                        |> .1
                         |> Eval.printValue
                         |> Stdout.line
 

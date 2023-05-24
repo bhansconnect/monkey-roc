@@ -3,7 +3,7 @@ interface Repl
     imports [pf.Stdout, pf.Stdin, pf.Task, Lexer, Parser, Eval]
 
 run =
-    {} <- Task.loop {}
+    env <- Task.loop (Eval.newEnv {})
 
     {} <- Stdout.write ">> " |> Task.await
     line <- Stdin.line |> Task.await
@@ -14,20 +14,20 @@ run =
         |> Lexer.lex
         |> Parser.parse
 
-    outputTask =
-        when parseResults is
-            Ok parsedData ->
+    when parseResults is
+        Ok parsedData ->
+            (nextEnv, val) =
                 parsedData
-                |> Eval.eval
-                |> Eval.printValue
-                |> Stdout.line
+                |> Eval.evalWithEnv env
+            {} <- Eval.printValue val |> Stdout.line |> Task.await
 
-            Err errs ->
-                errs
+            Task.succeed (Step nextEnv)
+
+        Err errs ->
+            {} <- errs
                 |> Str.joinWith "\n\t"
                 |> \e -> "Parse Errors:\n\t\(e)"
                 |> Stdout.line
+                |> Task.await
 
-    {} <- outputTask |> Task.await
-
-    Task.succeed (Step {})
+            Task.succeed (Step env)

@@ -1,5 +1,5 @@
 interface Eval
-    exposes [eval, printValue]
+    exposes [eval, evalWithEnv, newEnv, printValue]
     imports [Lexer, Parser.{ Index, Node, ParsedData }]
 
 Value : [
@@ -49,10 +49,12 @@ printValue = \value ->
         Error boxedStr -> Str.concat "ERROR: " (Box.unbox boxedStr)
         _ -> "Invalid ret value"
 
+Env : Dict Str Value
+
 Evaluator : {
     nodes : List Node,
     # TODO: look into making this a vecmap.
-    env : Dict Str Value,
+    env : Env,
 }
 
 setIdent : Evaluator, Str, Value -> (Evaluator, Value)
@@ -66,11 +68,18 @@ getIdent = \{ env }, ident ->
         Ok val -> val
         Err _ -> makeError "identifier not found: \(ident)"
 
-eval : ParsedData -> Value
-eval = \{ program, nodes } ->
-    e0 = { nodes, env: Dict.withCapacity 128 }
-    (_, out) = evalProgram e0 program
-    out
+newEnv : {} -> Env
+newEnv = \{} -> Dict.empty {}
+
+eval : ParsedData -> (Env, Value)
+eval = \pd ->
+    evalWithEnv pd (Dict.withCapacity 128)
+
+evalWithEnv : ParsedData, Env -> (Env, Value)
+evalWithEnv = \{ program, nodes }, env ->
+    e0 = { nodes, env }
+    ({ env: outEnv }, outVal) = evalProgram e0 program
+    (outEnv, outVal)
 
 evalProgram : Evaluator, List Index -> (Evaluator, Value)
 evalProgram = \e0, statements ->
@@ -301,6 +310,7 @@ runFromSource = \input ->
     |> Parser.parse
     |> okOrUnreachable "parse unexpectedly failed"
     |> eval
+    |> .1
 
 expect
     inputs = ["5", "10", "-5", "-10", "true", "false"]
