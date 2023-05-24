@@ -2,11 +2,23 @@ interface Eval
     exposes [eval, evalWithEnv, newEnv, printValue]
     imports [Lexer, Parser.{ Index, Node, ParsedData }]
 
+# Note: monkey technically has this weird mutable env binding.
+# It makes this work:
+#    let f = fn() { x }
+#    let x = 3
+#    f() => This returns 3
+# I don't like it, so I am just making the environment constant based on when the function was created.
+# Also, I was struggling to make a happy implementation based off of my roc code below.
+
 Value : [
     Int I64,
     True,
     False,
     Null,
+
+    # Env has to manually inlined here.
+    # Otherwise it hits a roc compiler bug.
+    Fn (Box { params : List Str, body : List Index, env : List [T Str Value] }),
 
     # Values that need to be propogated up and returned.
     RetInt I64,
@@ -30,6 +42,7 @@ valueToType = \val ->
         Int _ -> "INTEGER"
         True | False -> "BOOLEAN"
         Null -> "NULL"
+        Fn _ -> "FUNCTION"
         _ -> crash "value has no type"
 
 boolToValue : Bool -> Value
@@ -46,34 +59,46 @@ printValue = \value ->
         True -> "true"
         False -> "false"
         Null -> "null"
+        Fn _ -> "<function>"
         Error boxedStr -> Str.concat "ERROR: " (Box.unbox boxedStr)
         _ -> "Invalid ret value"
 
-Env : Dict Str Value
+Env : List [T Str Value]
 
 Evaluator : {
     nodes : List Node,
-    # TODO: look into making this a vecmap.
     env : Env,
 }
 
+withEnv : Evaluator, Env -> Evaluator
+withEnv = \{ nodes }, env ->
+    { nodes, env }
+
 setIdent : Evaluator, Str, Value -> (Evaluator, Value)
 setIdent = \{ nodes, env }, ident, val ->
-    nextEnv = Dict.insert env ident val
-    ({ nodes, env: nextEnv }, val)
+    when List.findFirstIndex env (\T k _ -> k == ident) is
+        Ok i ->
+            nextEnv = List.set env i (T ident val)
+            ({ nodes, env: nextEnv }, val)
+
+        Err _ ->
+            # TODO: check if sorted insert is faster.
+            nextEnv = List.append env (T ident val)
+            ({ nodes, env: nextEnv }, val)
 
 getIdent : Evaluator, Str -> Value
 getIdent = \{ env }, ident ->
-    when Dict.get env ident is
-        Ok val -> val
+    # TODO: maybe do binary search if the list is large enough.
+    when List.findFirst env (\T k _ -> k == ident) is
+        Ok (T _ v) -> v
         Err _ -> makeError "identifier not found: \(ident)"
 
 newEnv : {} -> Env
-newEnv = \{} -> Dict.empty {}
+newEnv = \{} -> []
 
 eval : ParsedData -> (Env, Value)
 eval = \pd ->
-    evalWithEnv pd (Dict.withCapacity 128)
+    evalWithEnv pd (List.withCapacity 128)
 
 evalWithEnv : ParsedData, Env -> (Env, Value)
 evalWithEnv = \{ program, nodes }, env ->
@@ -91,10 +116,7 @@ evalProgram = \e0, statements ->
             RetFalse -> Break (e2, False)
             RetNull -> Break (e2, Null)
             Error e -> Break (e2, Error e)
-            Int int -> Continue (e2, Int int)
-            True -> Continue (e2, True)
-            False -> Continue (e2, False)
-            Null -> Continue (e2, Null)
+            _ -> Continue (e2, val)
 
 evalBlock : Evaluator, List Index -> (Evaluator, Value)
 evalBlock = \e0, statements ->
@@ -106,10 +128,7 @@ evalBlock = \e0, statements ->
             RetFalse -> Break (e2, RetFalse)
             RetNull -> Break (e2, RetNull)
             Error e -> Break (e2, Error e)
-            Int int -> Continue (e2, Int int)
-            True -> Continue (e2, True)
-            False -> Continue (e2, False)
-            Null -> Continue (e2, Null)
+            _ -> Continue (e2, val)
 
 evalNode : Evaluator, Index -> (Evaluator, Value)
 evalNode = \e0, index ->
@@ -272,7 +291,54 @@ evalNode = \e0, index ->
         Ident identStr ->
             (e0, getIdent e0 identStr)
 
-        _ -> crash "not implemented yet"
+        Fn { params, body } ->
+            identListNode = loadOrCrash e0 params
+            bodyNode = loadOrCrash e0 body
+            when (identListNode, bodyNode) is
+                (IdentList paramList, Block statementList) ->
+                    (e0, Fn (Box.box { params: paramList, body: statementList, env: e0.env }))
+
+                _ -> crash "We already verified that we have an ident list and body when parsing"
+
+        Call { fn, args } ->
+            (e1, fnVal) = evalNode e0 fn
+            argsNode = loadOrCrash e1 args
+            when argsNode is
+                CallArgs callArgs ->
+                    (e2, argVals) = evalArgs e1 callArgs
+                    when (argVals, fnVal) is
+                        ([Error e], _) -> (e2, Error e)
+                        (_, Fn boxedFn) ->
+                            { params, body, env } = Box.unbox boxedFn
+                            if List.len params == List.len argVals then
+                                e3 = withEnv e2 env
+
+                                (e6, _) =
+                                    List.walk params (e3, 0) \(e4, i), param ->
+                                        (e5, _) = setIdent e4 param (okOrUnreachable (List.get argVals i) "size checked")
+                                        (e5, i + 1)
+
+                                (_, val) = evalBlock e6 body
+                                # reset environment back to before the function was run.
+                                (e2, val)
+                            else
+                                (e2, makeError "FUNCTION applied with wrong number of args")
+
+                        _ ->
+                            type = valueToType fnVal
+                            (e2, makeError "expected FUNCTION instead got \(type)")
+
+                _ -> crash "We already verified that we have call args when parsing"
+
+        IdentList _ -> crash "unreachable"
+        CallArgs _ -> crash "unreachable"
+
+evalArgs = \e0, args ->
+    List.walkUntil args (e0, List.withCapacity (List.len args)) \(e1, exprs), arg ->
+        (e2, argVal) = evalNode e1 arg
+        when argVal is
+            Error e -> Break (e2, [Error e])
+            _ -> Continue (e2, List.append exprs argVal)
 
 infixError : Str, Value, Value -> Value
 infixError = \op, lhs, rhs ->
@@ -456,3 +522,39 @@ expect
         Int 15,
     ]
     out == expected
+
+expect
+    inputs = [
+        "let identity = fn(x) { x; }; identity(5);",
+        "let identity = fn(x) { return x; 12; }; identity(5);",
+        "let double = fn(x) { 2 * x;  }; double(5);",
+        "fn(x) {x} (5)",
+        # TODO: why does this cause freeing a a pointer that wasn't allocated?
+        # "let add = fn(x, y) { x + y; }; add(5 + 5, add(5, 5));",
+    ]
+    out = List.map inputs runFromSource
+
+    expected = [
+        Int 5,
+        Int 5,
+        Int 10,
+        Int 5,
+        # Int 20,
+    ]
+    out == expected
+
+expect
+    input =
+        """
+        let newAdder = fn(x) {
+          fn(y) { x + y };
+        };
+
+        let addTwo = newAdder(2);
+        addTwo(2);
+        """
+    out = runFromSource input
+
+    expected = Int 4
+    out == expected
+
