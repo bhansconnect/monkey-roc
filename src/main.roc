@@ -11,7 +11,6 @@ main =
             [_, monkeyFile] ->
                 path = Path.fromStr monkeyFile
                 bytes <- File.readBytes path |> Task.await
-                {} <- Stderr.line "Parsed and formatted file is:\n" |> Task.await
 
                 parseResults =
                     bytes

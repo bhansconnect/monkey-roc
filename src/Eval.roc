@@ -308,6 +308,7 @@ evalNode = \e0, index ->
                     (e2, argVals) = evalArgs e1 callArgs
                     when (argVals, fnVal) is
                         ([Error e], _) -> (e2, Error e)
+                        (_, Error e) -> (e2, Error e)
                         (_, Fn boxedFn) ->
                             { params, body, env } = Box.unbox boxedFn
                             if List.len params == List.len argVals then
