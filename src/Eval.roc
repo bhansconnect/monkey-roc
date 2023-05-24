@@ -18,7 +18,7 @@ Value : [
 
     # Env has to manually inlined here.
     # Otherwise it hits a roc compiler bug.
-    Fn (Box { params : List Str, body : List Index, env : List [T Str Value] }),
+    Fn { paramsIndex : Index, bodyIndex : Index, envIndex : Index },
 
     # Values that need to be propogated up and returned.
     RetInt I64,
@@ -292,13 +292,7 @@ evalNode = \e0, index ->
             (e0, getIdent e0 identStr)
 
         Fn { params, body } ->
-            identListNode = loadOrCrash e0 params
-            bodyNode = loadOrCrash e0 body
-            when (identListNode, bodyNode) is
-                (IdentList paramList, Block statementList) ->
-                    (e0, Fn (Box.box { params: paramList, body: statementList, env: e0.env }))
-
-                _ -> crash "We already verified that we have an ident list and body when parsing"
+            (e0, Fn { paramsIndex: params, bodyIndex: body, envIndex: 0 })
 
         Call { fn, args } ->
             (e1, fnVal) = evalNode e0 fn
@@ -309,17 +303,24 @@ evalNode = \e0, index ->
                     when (argVals, fnVal) is
                         ([Error e], _) -> (e2, Error e)
                         (_, Error e) -> (e2, Error e)
-                        (_, Fn boxedFn) ->
-                            { params, body, env } = Box.unbox boxedFn
+                        (_, Fn { paramsIndex, bodyIndex, envIndex }) ->
+                            (params, body) =
+                                when (loadOrCrash e2 paramsIndex, loadOrCrash e2 bodyIndex) is
+                                    (IdentList paramList, Block statementList) ->
+                                        (paramList, statementList)
+
+                                    _ -> crash "We already verified that we have an ident list and body when parsing"
+
                             if List.len params == List.len argVals then
-                                e3 = withEnv e2 env
+                                # e3 = withEnv e2 env
+                                e3 = e2
 
                                 (e6, _) =
                                     List.walk params (e3, 0) \(e4, i), param ->
                                         (e5, _) = setIdent e4 param (okOrUnreachable (List.get argVals i) "size checked")
                                         (e5, i + 1)
 
-                                (_, val) = evalBlock e6 body
+                                (_, val) = evalProgram e6 body
                                 # reset environment back to before the function was run.
                                 (e2, val)
                             else
