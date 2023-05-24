@@ -2,22 +2,11 @@ interface Eval
     exposes [eval, evalWithEnv, newEnv, printValue]
     imports [Lexer, Parser.{ Index, Node, ParsedData }]
 
-# Note: monkey technically has this weird mutable env binding.
-# It makes this work:
-#    let f = fn() { x }
-#    let x = 3
-#    f() => This returns 3
-# I don't like it, so I am just making the environment constant based on when the function was created.
-# Also, I was struggling to make a happy implementation based off of my roc code below.
-
 Value : [
     Int I64,
     True,
     False,
     Null,
-
-    # Env has to manually inlined here.
-    # Otherwise it hits a roc compiler bug.
     Fn { paramsIndex : Index, bodyIndex : Index, envIndex : Index },
 
     # Values that need to be propogated up and returned.
@@ -63,48 +52,66 @@ printValue = \value ->
         Error boxedStr -> Str.concat "ERROR: " (Box.unbox boxedStr)
         _ -> "Invalid ret value"
 
-Env : List [T Str Value]
+Env : {
+    inner : List [T Str Value],
+    outer : Result Index [IsRoot],
+}
 
 Evaluator : {
     nodes : List Node,
-    env : Env,
+    # TODO: This setup never frees old envs.
+    envs : List Env,
+    currentEnv : Index,
 }
 
-withEnv : Evaluator, Env -> Evaluator
-withEnv = \{ nodes }, env ->
-    { nodes, env }
-
 setIdent : Evaluator, Str, Value -> (Evaluator, Value)
-setIdent = \{ nodes, env }, ident, val ->
-    when List.findFirstIndex env (\T k _ -> k == ident) is
+setIdent = \{ nodes, envs: envs0, currentEnv }, ident, val ->
+    { list: envs1, value: { inner, outer } } = List.replace envs0 (Num.toNat currentEnv) (newEnv {})
+    when List.findFirstIndex inner (\T k _ -> k == ident) is
         Ok i ->
-            nextEnv = List.set env i (T ident val)
-            ({ nodes, env: nextEnv }, val)
+            nextInner = List.set inner i (T ident val)
+            ({ nodes, currentEnv, envs: List.set envs1 (Num.toNat currentEnv) { inner: nextInner, outer } }, val)
 
         Err _ ->
             # TODO: check if sorted insert is faster.
-            nextEnv = List.append env (T ident val)
-            ({ nodes, env: nextEnv }, val)
+            nextInner = List.append inner (T ident val)
+            ({ nodes, currentEnv, envs: List.set envs1 (Num.toNat currentEnv) { inner: nextInner, outer } }, val)
 
-getIdent : Evaluator, Str -> Value
-getIdent = \{ env }, ident ->
+getIdent : List Env, Index, Str -> Value
+getIdent = \envs, currentEnv, ident ->
     # TODO: maybe do binary search if the list is large enough.
-    when List.findFirst env (\T k _ -> k == ident) is
+    { inner, outer } =
+        when List.get envs (Num.toNat currentEnv) is
+            Ok env -> env
+            Err _ -> crash "bad env index"
+    when List.findFirst inner (\T k _ -> k == ident) is
         Ok (T _ v) -> v
-        Err _ -> makeError "identifier not found: \(ident)"
+        Err _ ->
+            when outer is
+                Ok envIndex ->
+                    getIdent envs envIndex ident
+
+                Err _ ->
+                    makeError "identifier not found: \(ident)"
 
 newEnv : {} -> Env
-newEnv = \{} -> []
+newEnv = \{} -> { inner: [], outer: Err IsRoot }
+
+wrapAndSetEnv : Evaluator, Index -> Evaluator
+wrapAndSetEnv = \{ nodes, envs }, i ->
+    newIndex = List.len envs |> Num.toU32
+    nextEnvs = List.append envs { inner: [], outer: Ok i }
+    { nodes, envs: nextEnvs, currentEnv: newIndex }
 
 eval : ParsedData -> (Env, Value)
 eval = \pd ->
-    evalWithEnv pd (List.withCapacity 128)
+    evalWithEnv pd (newEnv {})
 
 evalWithEnv : ParsedData, Env -> (Env, Value)
 evalWithEnv = \{ program, nodes }, env ->
-    e0 = { nodes, env }
-    ({ env: outEnv }, outVal) = evalProgram e0 program
-    (outEnv, outVal)
+    e0 = { nodes, envs: [env], currentEnv: 0 }
+    ({ envs: outEnvs }, outVal) = evalProgram e0 program
+    (okOrUnreachable (List.get outEnvs 0) "failed to load root env", outVal)
 
 evalProgram : Evaluator, List Index -> (Evaluator, Value)
 evalProgram = \e0, statements ->
@@ -289,10 +296,10 @@ evalNode = \e0, index ->
                 _ -> crash "We already verified that we have an ident when parsing"
 
         Ident identStr ->
-            (e0, getIdent e0 identStr)
+            (e0, getIdent e0.envs e0.currentEnv identStr)
 
         Fn { params, body } ->
-            (e0, Fn { paramsIndex: params, bodyIndex: body, envIndex: 0 })
+            (e0, Fn { paramsIndex: params, bodyIndex: body, envIndex: e0.currentEnv })
 
         Call { fn, args } ->
             (e1, fnVal) = evalNode e0 fn
@@ -312,17 +319,17 @@ evalNode = \e0, index ->
                                     _ -> crash "We already verified that we have an ident list and body when parsing"
 
                             if List.len params == List.len argVals then
-                                # e3 = withEnv e2 env
-                                e3 = e2
+                                e2Index = e2.currentEnv
+                                e3 = wrapAndSetEnv e2 envIndex
 
                                 (e6, _) =
                                     List.walk params (e3, 0) \(e4, i), param ->
                                         (e5, _) = setIdent e4 param (okOrUnreachable (List.get argVals i) "size checked")
                                         (e5, i + 1)
 
-                                (_, val) = evalProgram e6 body
+                                (e7, val) = evalProgram e6 body
                                 # reset environment back to before the function was run.
-                                (e2, val)
+                                ({ e7 & currentEnv: e2Index }, val)
                             else
                                 (e2, makeError "FUNCTION applied with wrong number of args")
 
