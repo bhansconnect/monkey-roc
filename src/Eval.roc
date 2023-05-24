@@ -51,11 +51,24 @@ printValue = \value ->
 
 Evaluator : {
     nodes : List Node,
+    # TODO: look into making this a vecmap.
+    env : Dict Str Value,
 }
+
+setIdent : Evaluator, Str, Value -> (Evaluator, Value)
+setIdent = \{ nodes, env }, ident, val ->
+    nextEnv = Dict.insert env ident val
+    ({ nodes, env: nextEnv }, val)
+
+getIdent : Evaluator, Str -> Value
+getIdent = \{ env }, ident ->
+    when Dict.get env ident is
+        Ok val -> val
+        Err _ -> makeError "identifier not found: \(ident)"
 
 eval : ParsedData -> Value
 eval = \{ program, nodes } ->
-    e0 = { nodes }
+    e0 = { nodes, env: Dict.withCapacity 128 }
     (_, out) = evalProgram e0 program
     out
 
@@ -236,6 +249,20 @@ evalNode = \e0, index ->
                 Error e -> (e1, Error e)
                 _ -> (e1, Null)
 
+        Let { ident, expr } ->
+            identNode = loadOrCrash e0 ident
+            when identNode is
+                Ident identStr ->
+                    (e1, exprVal) = evalNode e0 expr
+                    when exprVal is
+                        Error e -> (e1, Error e)
+                        _ -> setIdent e1 identStr exprVal
+
+                _ -> crash "We already verified that we have an ident when parsing"
+
+        Ident identStr ->
+            (e0, getIdent e0 identStr)
+
         _ -> crash "not implemented yet"
 
 infixError : Str, Value, Value -> Value
@@ -400,5 +427,22 @@ expect
         Int 10,
         Int 10,
         Int 10,
+    ]
+    out == expected
+
+expect
+    inputs = [
+        "let a = 5; a;",
+        "let a = 5 * 5; a;",
+        "let a = 5; let b = a; b;",
+        "let a = 5; let b = a; let c = a + b + 5; c;",
+    ]
+    out = List.map inputs runFromSource
+
+    expected = [
+        Int 5,
+        Int 25,
+        Int 5,
+        Int 15,
     ]
     out == expected
