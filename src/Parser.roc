@@ -19,7 +19,7 @@ Program : List Index
 # This is a bit a laziness and a bit of avoiding bloat.
 # This enables storing a List or Str directly in a node if it is the only value in a node.
 # One thing we lose with this current setup in roc is knowledge around the nested tag type.
-# Even thouhg let must contain an Ident, Roc will force us to check the tag to extra the ident.
+# Even though let must contain an Ident, Roc will force us to check the tag to extra the ident.
 Node : [
     Fn { params : Index, body : Index },
     If { cond : Index, consequence : Index },
@@ -63,6 +63,9 @@ Parser : {
     errors : Errors,
 }
 
+# Errors are collected in the Parser state.
+ParseResult : Result (Parser, Index) Parser
+
 addNode : Parser, Node -> (Parser, Index)
 addNode = \{ nodes, remainingTokens, bytes, errors }, node ->
     index = List.len nodes
@@ -76,6 +79,10 @@ advanceTokens = \{ nodes, remainingTokens, bytes, errors }, n ->
 addError : Parser, Str -> Parser
 addError = \{ nodes, remainingTokens, bytes, errors }, error ->
     { nodes, remainingTokens, bytes, errors: List.append errors error }
+
+unexpectedEof : Parser -> Parser
+unexpectedEof = \p0 ->
+    addError p0 "Unexpectly ran out of tokens"
 
 parse : LexedData -> Result ParsedData Errors
 parse = \lexedData ->
@@ -92,38 +99,41 @@ parse = \lexedData ->
 
 parseProgram : Parser, Program -> Result ParsedData Errors
 parseProgram = \p0, program ->
-    when List.first p0.remainingTokens is
-        Ok { kind: Eof } ->
+    when p0.remainingTokens is
+        [{ kind: Eof }, ..] ->
             if List.isEmpty p0.errors then
                 Ok { program, nodes: p0.nodes }
             else
                 Err p0.errors
 
-        Ok token ->
-            (p1, statement) = parseStatement p0 token
-            when statement is
-                Ok index ->
+        [token, ..] ->
+            when parseStatement p0 token is
+                Ok (p1, index) ->
                     parseProgram p1 (List.append program index)
 
-                Err {} ->
+                Err p1 ->
                     parseProgram p1 program
 
-        Err _ ->
+        [] ->
             eofCrash {}
 
-parseStatement : Parser, Lexer.Token -> (Parser, Result Index {})
+parseStatement : Parser, Lexer.Token -> ParseResult
 parseStatement = \p0, token ->
     when token.kind is
         Let ->
-            parseLetStatement (advanceTokens p0 1)
+            p0
+            |> advanceTokens 1
+            |> parseLetStatement
 
         Return ->
-            parseReturnStatement (advanceTokens p0 1)
+            p0
+            |> advanceTokens 1
+            |> parseReturnStatement
 
         _ ->
             parseExpressionStatement p0
 
-parseLetStatement : Parser -> (Parser, Result Index {})
+parseLetStatement : Parser -> ParseResult
 parseLetStatement = \p0 ->
     when p0.remainingTokens is
         [{ kind: Ident, index: byteIndex }, { kind: Assign }, ..] ->
@@ -133,39 +143,31 @@ parseLetStatement = \p0 ->
                 |> okOrUnreachable "Ident is not valid utf8"
 
             (p1, identIndex) = addNode p0 (Ident ident)
-            (p2, exprRes) = parseExpression (advanceTokens p1 2) precLowest
-            when exprRes is
-                Ok exprIndex ->
-                    (p3, letIndex) = addNode p2 (Let { ident: identIndex, expr: exprIndex })
-                    (consumeOptionalSemicolon p3, Ok letIndex)
-
-                Err {} ->
-                    (p2, Err {})
+            (p2, exprIndex) <- parseExpression (advanceTokens p1 2) precLowest |> Result.map
+            (p3, letIndex) = addNode p2 (Let { ident: identIndex, expr: exprIndex })
+            (consumeOptionalSemicolon p3, letIndex)
 
         [{ kind: Ident }, token, ..] ->
             p0
             |> advanceTokens 1
             |> tokenMismatch "Assign" token
-            |> \p1 -> (p1, Err {})
+            |> Err
 
         [token, ..] ->
             p0
             |> tokenMismatch "Ident" token
-            |> \p1 -> (p1, Err {})
+            |> Err
 
         [] ->
-            eofCrash {}
+            p0
+            |> unexpectedEof
+            |> Err
 
-parseReturnStatement : Parser -> (Parser, Result Index {})
+parseReturnStatement : Parser -> ParseResult
 parseReturnStatement = \p0 ->
-    (p1, exprRes) = parseExpression p0 precLowest
-    when exprRes is
-        Ok exprIndex ->
-            (p2, retIndex) = addNode p1 (Return { expr: exprIndex })
-            (consumeOptionalSemicolon p2, Ok retIndex)
-
-        Err {} ->
-            (p1, Err {})
+    (p1, exprIndex) <- parseExpression p0 precLowest |> Result.map
+    (p2, retIndex) = addNode p1 (Return { expr: exprIndex })
+    (consumeOptionalSemicolon p2, retIndex)
 
 tokenMismatch : Parser, Str, Lexer.Token -> Parser
 tokenMismatch = \p0, wanted, got ->
@@ -177,9 +179,9 @@ tokenMismatch = \p0, wanted, got ->
 
 # We just parse this into an expression.
 # No need to wrap it in a special node.
-parseExpressionStatement : Parser -> (Parser, Result Index {})
+parseExpressionStatement : Parser -> ParseResult
 parseExpressionStatement = \p0 ->
-    (p1, exprRes) = parseExpression p0 precLowest
+    (p1, exprRes) <- parseExpression p0 precLowest |> Result.map
     (consumeOptionalSemicolon p1, exprRes)
 
 Precedence := U32
@@ -191,32 +193,40 @@ precProduct = @Precedence 5
 precPrefix = @Precedence 6
 precCall = @Precedence 7
 
-parseExpression : Parser, Precedence -> (Parser, Result Index {})
-parseExpression = \p0, basePrecedence ->
-    (p1, leftRes) = parsePrefix p0
+precGTE = \@Precedence lhs, @Precedence rhs -> lhs >= rhs
 
-    when leftRes is
-        Ok left ->
-            parseInfix p1 left basePrecedence
+peekPrecedence : Parser -> Precedence
+peekPrecedence = \p0 ->
+    when List.first p0.remainingTokens is
+        Ok { kind: Eq } -> precEquals
+        Ok { kind: NotEq } -> precEquals
+        Ok { kind: Gt } -> precLessGreater
+        Ok { kind: Lt } -> precLessGreater
+        Ok { kind: Plus } -> precSum
+        Ok { kind: Minus } -> precSum
+        Ok { kind: Asterisk } -> precProduct
+        Ok { kind: Slash } -> precProduct
+        Ok { kind: LParen } -> precCall
+        _ -> precLowest
 
-        Err {} -> (p1, Err {})
+parseExpression : Parser, Precedence -> ParseResult
+parseExpression = \p0, basePrec ->
+    (p1, lhs) <- parsePrefix p0 |> Result.try
+    parseInfix p1 lhs basePrec
 
-parseInfix : Parser, Index, Precedence -> (Parser, Result Index {})
-parseInfix = \p0, lhsIndex, @Precedence basePrecedence ->
-    (@Precedence nextPrecedence) = peekPrecedence p0
-    if basePrecedence < nextPrecedence then
-        when List.first p0.remainingTokens is
-            Ok { kind: LParen } ->
-                (p1, argsRes) = parseCallArgs (advanceTokens p0 1)
-                when argsRes is
-                    Ok argsIndex ->
-                        (p2, callIndex) = addNode p1 (Call { fn: lhsIndex, args: argsIndex })
-                        parseInfix p2 callIndex (@Precedence basePrecedence)
+parseInfix : Parser, Index, Precedence -> ParseResult
+parseInfix = \p0, lhsIndex, basePrec ->
+    nextPrec = peekPrecedence p0
+    if precGTE basePrec nextPrec then
+        Ok (p0, lhsIndex)
+    else
+        when p0.remainingTokens is
+            [{ kind: LParen }, ..] ->
+                (p1, argsIndex) <- parseCallArgs (advanceTokens p0 1) |> Result.try
+                (p2, callIndex) = addNode p1 (Call { fn: lhsIndex, args: argsIndex })
+                parseInfix p2 callIndex basePrec
 
-                    Err {} ->
-                        (p1, Err {})
-
-            Ok token ->
+            [token, ..] ->
                 # parse standard infix
                 binOpRes =
                     when token.kind is
@@ -232,85 +242,60 @@ parseInfix = \p0, lhsIndex, @Precedence basePrecedence ->
 
                 when binOpRes is
                     Ok binOp ->
-                        (p1, rhsRes) = parseExpression (advanceTokens p0 1) (@Precedence nextPrecedence)
-                        when rhsRes is
-                            Ok rhsIndex ->
-                                (p2, binIndex) = addNode p1 (binOp { lhs: lhsIndex, rhs: rhsIndex })
-                                parseInfix p2 binIndex (@Precedence basePrecedence)
-
-                            Err {} ->
-                                (p1, Err {})
+                        (p1, rhsIndex) <- parseExpression (advanceTokens p0 1) nextPrec |> Result.try
+                        (p2, binIndex) = addNode p1 (binOp { lhs: lhsIndex, rhs: rhsIndex })
+                        parseInfix p2 binIndex basePrec
 
                     Err NotInfix ->
-                        (p0, Ok lhsIndex)
+                        Ok (p0, lhsIndex)
 
-            Err _ -> eofCrash {}
-    else
-        (p0, Ok lhsIndex)
+            [] ->
+                p0
+                |> unexpectedEof
+                |> Err
 
-parseCallArgs : Parser -> (Parser, Result Index {})
+parseCallArgs : Parser -> ParseResult
 parseCallArgs = \p0 ->
-    when List.first p0.remainingTokens is
-        Ok { kind: RParen } ->
-            (p1, index) = addNode (advanceTokens p0 1) (CallArgs [])
-            (p1, Ok index)
+    when p0.remainingTokens is
+        [{ kind: RParen }, ..] ->
+            addNode (advanceTokens p0 1) (CallArgs [])
+            |> Ok
 
-        Ok _ ->
-            (p1, argRes) = parseExpression p0 precLowest
-            when argRes is
-                Ok argIndex ->
-                    parseCallArgsHelper p1 [argIndex]
+        [_, ..] ->
+            (p1, argIndex) <- parseExpression p0 precLowest |> Result.try
+            parseCallArgsHelper p1 [argIndex]
 
-                Err {} ->
-                    (p1, Err {})
+        [] ->
+            p0
+            |> unexpectedEof
+            |> Err
 
-        Err _ ->
-            eofCrash {}
-
-parseCallArgsHelper : Parser, List Index -> (Parser, Result Index {})
+parseCallArgsHelper : Parser, List Index -> ParseResult
 parseCallArgsHelper = \p0, args ->
-    when List.first p0.remainingTokens is
-        Ok { kind: RParen } ->
-            (p1, index) = addNode (advanceTokens p0 1) (CallArgs args)
-            (p1, Ok index)
+    when p0.remainingTokens is
+        [{ kind: RParen }, ..] ->
+            addNode (advanceTokens p0 1) (CallArgs args)
+            |> Ok
 
-        Ok { kind: Comma } ->
-            (p1, argRes) = parseExpression (advanceTokens p0 1) precLowest
-            when argRes is
-                Ok argIndex ->
-                    parseCallArgsHelper p1 (List.append args argIndex)
+        [{ kind: Comma }, ..] ->
+            (p1, argIndex) <- parseExpression (advanceTokens p0 1) precLowest |> Result.try
+            parseCallArgsHelper p1 (List.append args argIndex)
 
-                Err {} ->
-                    (p1, Err {})
-
-        Ok token ->
+        [token, ..] ->
             p0
             |> advanceTokens 1
             |> tokenMismatch "RParen or Comma" token
-            |> \p1 -> (p1, Err {})
+            |> Err
 
-        Err _ ->
-            eofCrash {}
+        [] ->
+            p0
+            |> unexpectedEof
+            |> Err
 
-peekPrecedence : Parser -> Precedence
-peekPrecedence = \p0 ->
-    when List.first p0.remainingTokens is
-        Ok { kind: Eq } -> precEquals
-        Ok { kind: NotEq } -> precEquals
-        Ok { kind: Gt } -> precLessGreater
-        Ok { kind: Lt } -> precLessGreater
-        Ok { kind: Plus } -> precSum
-        Ok { kind: Minus } -> precSum
-        Ok { kind: Asterisk } -> precProduct
-        Ok { kind: Slash } -> precProduct
-        Ok { kind: LParen } -> precCall
-        Ok _ -> precLowest
-        Err _ -> eofCrash {}
-
-parsePrefix : Parser -> (Parser, Result Index {})
+parsePrefix : Parser -> ParseResult
 parsePrefix = \p0 ->
-    when List.first p0.remainingTokens is
-        Ok { kind: Ident, index: byteIndex } ->
+    when p0.remainingTokens is
+        [{ kind: Ident, index: byteIndex }, ..] ->
             ident =
                 Lexer.getIdent p0.bytes byteIndex
                 |> Str.fromUtf8
@@ -319,9 +304,9 @@ parsePrefix = \p0 ->
             p0
             |> advanceTokens 1
             |> addNode (Ident ident)
-            |> \(p1, index) -> (p1, Ok index)
+            |> Ok
 
-        Ok { kind: Int, index: byteIndex } ->
+        [{ kind: Int, index: byteIndex }, ..] ->
             intStr =
                 Lexer.getInt p0.bytes byteIndex
                 |> Str.fromUtf8
@@ -332,73 +317,57 @@ parsePrefix = \p0 ->
                     p0
                     |> advanceTokens 1
                     |> addNode (Int int)
-                    |> \(p1, index) -> (p1, Ok index)
+                    |> Ok
 
                 Err _ ->
                     p0
                     |> advanceTokens 1
                     |> addError "could not parse \(intStr) as integer"
-                    |> \p1 -> (p1, Err {})
+                    |> Err
 
-        Ok { kind: Bang, index: _ } ->
-            (p1, exprRes) = parseExpression (advanceTokens p0 1) precPrefix
-            when exprRes is
-                Ok exprIndex ->
-                    (p2, notIndex) = addNode p1 (Not { expr: exprIndex })
-                    (p2, Ok notIndex)
+        [{ kind: Bang, index: _ }, ..] ->
+            (p1, exprIndex) <- parseExpression (advanceTokens p0 1) precPrefix |> Result.map
+            addNode p1 (Not { expr: exprIndex })
 
-                Err {} ->
-                    (p1, Err {})
+        [{ kind: Minus, index: _ }, ..] ->
+            (p1, exprIndex) <- parseExpression (advanceTokens p0 1) precPrefix |> Result.map
+            addNode p1 (Negate { expr: exprIndex })
 
-        Ok { kind: Minus, index: _ } ->
-            (p1, exprRes) = parseExpression (advanceTokens p0 1) precPrefix
-            when exprRes is
-                Ok exprIndex ->
-                    (p2, negateIndex) = addNode p1 (Negate { expr: exprIndex })
-                    (p2, Ok negateIndex)
+        [{ kind: LParen, index: _ }, ..] ->
+            (p1, exprIndex) <- parseExpression (advanceTokens p0 1) precLowest |> Result.try
+            when p1.remainingTokens is
+                [{ kind: RParen }, ..] ->
+                    Ok (advanceTokens p1 1, exprIndex)
 
-                Err {} ->
-                    (p1, Err {})
+                [token, ..] ->
+                    p1
+                    |> tokenMismatch "RParen" token
+                    |> Err
 
-        Ok { kind: LParen, index: _ } ->
-            (p1, exprRes) = parseExpression (advanceTokens p0 1) precLowest
-            when exprRes is
-                Ok exprIndex ->
-                    when List.first p1.remainingTokens is
-                        Ok { kind: RParen } ->
-                            (advanceTokens p1 1, Ok exprIndex)
+                [] ->
+                    p0
+                    |> unexpectedEof
+                    |> Err
 
-                        Ok token ->
-                            p1
-                            |> advanceTokens 1
-                            |> tokenMismatch "RParen" token
-                            |> \p2 -> (p2, Err {})
-
-                        Err _ ->
-                            eofCrash {}
-
-                Err {} ->
-                    (p1, Err {})
-
-        Ok { kind: True, index: _ } ->
+        [{ kind: True, index: _ }, ..] ->
             p0
             |> advanceTokens 1
             |> addNode True
-            |> \(p1, index) -> (p1, Ok index)
+            |> Ok
 
-        Ok { kind: False, index: _ } ->
+        [{ kind: False, index: _ }, ..] ->
             p0
             |> advanceTokens 1
             |> addNode False
-            |> \(p1, index) -> (p1, Ok index)
+            |> Ok
 
-        Ok { kind: If, index: _ } ->
+        [{ kind: If, index: _ }, ..] ->
             parseIfExpression (advanceTokens p0 1)
 
-        Ok { kind: Function, index: _ } ->
+        [{ kind: Function, index: _ }, ..] ->
             parseFnExpression (advanceTokens p0 1)
 
-        Ok token ->
+        [token, ..] ->
             debugStr =
                 Lexer.debugPrintToken [] p0.bytes token
                 |> Str.fromUtf8
@@ -407,45 +376,44 @@ parsePrefix = \p0 ->
             p0
             |> advanceTokens 1
             |> addError "no prefix parse function for \(debugStr) found"
-            |> \p1 -> (p1, Err {})
+            |> Err
 
-        Err _ ->
-            eofCrash {}
+        [] ->
+            p0
+            |> unexpectedEof
+            |> Err
 
-parseFnExpression : Parser -> (Parser, Result Index {})
+parseFnExpression : Parser -> ParseResult
 parseFnExpression = \p0 ->
-    when List.first p0.remainingTokens is
-        Ok { kind: LParen } ->
-            (p1, paramsRes) = parseFnParams (advanceTokens p0 1) []
-            when paramsRes is
-                Ok paramsIndex ->
-                    when List.first p1.remainingTokens is
-                        Ok { kind: LBrace } ->
-                            (p2, bodyRes) = parseBlock (advanceTokens p1 1) []
-                            when bodyRes is
-                                Ok bodyIndex ->
-                                    (p3, fnIndex) = addNode p2 (Fn { params: paramsIndex, body: bodyIndex })
-                                    (p3, Ok fnIndex)
+    when p0.remainingTokens is
+        [{ kind: LParen }, ..] ->
+            (p1, paramsIndex) <- parseFnParams (advanceTokens p0 1) [] |> Result.try
+            when p1.remainingTokens is
+                [{ kind: LBrace }, ..] ->
+                    (p2, bodyIndex) <- parseBlock (advanceTokens p1 1) [] |> Result.map
+                    addNode p2 (Fn { params: paramsIndex, body: bodyIndex })
 
-                                Err {} ->
-                                    (p2, Err {})
+                [token, ..] ->
+                    p1
+                    |> tokenMismatch "LBrace" token
+                    |> Err
 
-                        Ok token ->
-                            (tokenMismatch p1 "LBrace" token, Err {})
+                [] ->
+                    p1
+                    |> unexpectedEof
+                    |> Err
 
-                        Err _ ->
-                            eofCrash {}
+        [token, ..] ->
+            p0
+            |> tokenMismatch "LParen" token
+            |> Err
 
-                Err {} ->
-                    (p1, Err {})
+        [] ->
+            p0
+            |> unexpectedEof
+            |> Err
 
-        Ok token ->
-            (tokenMismatch p0 "LParen" token, Err {})
-
-        Err _ ->
-            eofCrash {}
-
-parseFnParams : Parser, List Str -> (Parser, Result Index {})
+parseFnParams : Parser, List Str -> ParseResult
 parseFnParams = \p0, idents ->
     when p0.remainingTokens is
         [{ kind: Ident, index: byteIndex }, { kind: Comma }, ..] ->
@@ -460,95 +428,94 @@ parseFnParams = \p0, idents ->
                 Lexer.getIdent p0.bytes byteIndex
                 |> Str.fromUtf8
                 |> okOrUnreachable "Ident is not valid utf8"
-            (p1, index) = addNode (advanceTokens p0 2) (IdentList (List.append idents ident))
-            (p1, Ok index)
+            addNode (advanceTokens p0 2) (IdentList (List.append idents ident))
+            |> Ok
 
         [{ kind: RParen }, ..] ->
-            (p1, index) = addNode (advanceTokens p0 1) (IdentList idents)
-            (p1, Ok index)
+            addNode (advanceTokens p0 1) (IdentList idents)
+            |> Ok
 
         [token, ..] ->
             p0
             |> tokenMismatch "Ident" token
-            |> \p1 -> (p1, Err {})
+            |> Err
 
         [] ->
-            eofCrash {}
+            p0
+            |> unexpectedEof
+            |> Err
 
 # TODO: Add some sort of wrapper and backpassing or similar to avoid all the nesting here and in similar functions.
 # This is just painfully deep.
-parseIfExpression : Parser -> (Parser, Result Index {})
+parseIfExpression : Parser -> ParseResult
 parseIfExpression = \p0 ->
-    when List.first p0.remainingTokens is
-        Ok { kind: LParen } ->
-            (p1, condRes) = parseExpression (advanceTokens p0 1) precLowest
-            when condRes is
-                Ok condIndex ->
-                    when p1.remainingTokens is
-                        [{ kind: RParen }, { kind: LBrace }, ..] ->
-                            (p2, consequenceRes) = parseBlock (advanceTokens p1 2) []
-                            when consequenceRes is
-                                Ok consequenceIndex ->
-                                    when p2.remainingTokens is
-                                        [{ kind: Else }, { kind: LBrace }, ..] ->
-                                            (p3, alternativeRes) = parseBlock (advanceTokens p2 2) []
-                                            when alternativeRes is
-                                                Ok alternativeIndex ->
-                                                    (p4, ifElseIndex) = addNode p3 (IfElse { cond: condIndex, consequence: consequenceIndex, alternative: alternativeIndex })
-                                                    (p4, Ok ifElseIndex)
+    when p0.remainingTokens is
+        [{ kind: LParen }, ..] ->
+            (p1, condIndex) <- parseExpression (advanceTokens p0 1) precLowest |> Result.try
+            when p1.remainingTokens is
+                [{ kind: RParen }, { kind: LBrace }, ..] ->
+                    (p2, consequenceIndex) <- parseBlock (advanceTokens p1 2) [] |> Result.try
+                    when p2.remainingTokens is
+                        [{ kind: Else }, { kind: LBrace }, ..] ->
+                            (p3, alternativeIndex) <- parseBlock (advanceTokens p2 2) [] |> Result.map
+                            addNode p3 (IfElse { cond: condIndex, consequence: consequenceIndex, alternative: alternativeIndex })
 
-                                                Err {} ->
-                                                    (p3, Err {})
-
-                                        [_, ..] ->
-                                            (p3, ifIndex) = addNode p2 (If { cond: condIndex, consequence: consequenceIndex })
-                                            (p3, Ok ifIndex)
-
-                                        [] ->
-                                            eofCrash {}
-
-                                Err {} ->
-                                    (p2, Err {})
-
-                        [{ kind: RParen }, token, ..] ->
-                            p1
-                            |> advanceTokens 1
-                            |> tokenMismatch "LBrace" token
-                            |> \p2 -> (p2, Err {})
-
-                        [token, ..] ->
-                            (tokenMismatch p1 "RParen" token, Err {})
+                        [_, ..] ->
+                            addNode p2 (If { cond: condIndex, consequence: consequenceIndex })
+                            |> Ok
 
                         [] ->
-                            eofCrash {}
+                            p2
+                            |> unexpectedEof
+                            |> Err
 
-                Err {} ->
-                    (p1, Err {})
+                [{ kind: RParen }, token, ..] ->
+                    p1
+                    |> advanceTokens 1
+                    |> tokenMismatch "LBrace" token
+                    |> Err
 
-        Ok token ->
-            (tokenMismatch p0 "LParen" token, Err {})
+                [token, ..] ->
+                    p1
+                    |> tokenMismatch "RParen" token
+                    |> Err
 
-        Err _ ->
-            eofCrash {}
+                [] ->
+                    p1
+                    |> unexpectedEof
+                    |> Err
 
-parseBlock : Parser, List Index -> (Parser, Result Index {})
+        [token, ..] ->
+            p0
+            |> tokenMismatch "LParen" token
+            |> Err
+
+        [] ->
+            p0
+            |> unexpectedEof
+            |> Err
+
+parseBlock : Parser, List Index -> ParseResult
 parseBlock = \p0, statements ->
-    when List.first p0.remainingTokens is
-        Ok { kind: RBrace } ->
-            (p1, index) = addNode (advanceTokens p0 1) (Block statements)
-            (p1, Ok index)
+    when p0.remainingTokens is
+        [{ kind: RBrace }, ..] ->
+            p0
+            |> advanceTokens 1
+            |> addNode (Block statements)
+            |> Ok
 
-        Ok token ->
-            (p1, statement) = parseStatement p0 token
-            when statement is
-                Ok index ->
+        [token, ..] ->
+            when parseStatement p0 token is
+                Ok (p1, index) ->
                     parseBlock p1 (List.append statements index)
 
-                Err {} ->
+                Err p1 ->
                     parseBlock p1 statements
 
-        Err _ ->
-            eofCrash {}
+        [] ->
+            p0
+            |> unexpectedEof
+            |> Err
 
 consumeOptionalSemicolon : Parser -> Parser
 consumeOptionalSemicolon = \p0 ->
