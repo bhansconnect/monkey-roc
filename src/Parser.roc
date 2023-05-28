@@ -807,8 +807,7 @@ formatedOutput = \input ->
     |> Str.toUtf8
     |> Lexer.lex
     |> parse
-    |> okOrUnreachable "parse unexpectedly failed"
-    |> \parsed -> debugPrint "" parsed
+    |> Result.map \parsed -> debugPrint "" parsed
 
 expect
     input =
@@ -820,7 +819,7 @@ expect
         """
     out = formatedOutput input
 
-    expected = input
+    expected = Ok input
     out == expected
 
 expect
@@ -832,7 +831,7 @@ expect
         """
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         (!5);
         (-15);
@@ -855,7 +854,7 @@ expect
         """
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         (5 + 5);
         (5 - 5);
@@ -887,7 +886,7 @@ expect
         """
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         ((-a) * b);
         (!(-a));
@@ -916,7 +915,7 @@ expect
         """
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         true;
         false;
@@ -937,7 +936,7 @@ expect
         """
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         ((1 + (2 + 3)) + 4);
         ((5 + 5) * 2);
@@ -953,7 +952,7 @@ expect
         "if (x < y) { x }"
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         if (x < y) {
             x;
@@ -967,7 +966,7 @@ expect
         "if (x < y) { x } else { y }"
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         if (x < y) {
             x;
@@ -987,7 +986,7 @@ expect
         """
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         fn() {
         };
@@ -1010,7 +1009,7 @@ expect
         """
     out = formatedOutput input
 
-    expected =
+    expected = Ok
         """
         ((a + add((b * c))) + d);
         add(a, b, 1, (2 * 3), (4 + 5), add(6, (7 * 8)));
