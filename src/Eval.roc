@@ -120,14 +120,30 @@ decEnv = \{ nodes, envs, currentEnv }, i ->
             nextRc = Num.subSaturated rc 1
             nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer: Ok nextI }
             decEnv { nodes, envs: nextEnvs, currentEnv } nextI
+            |> maybeFreeEnv i
 
         Ok { rc, inner, outer } ->
             nextRc = Num.subSaturated rc 1
             nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer }
             { nodes, envs: nextEnvs, currentEnv }
+            |> maybeFreeEnv i
 
         Err _ ->
             crash "env index out of bounds"
+
+maybeFreeEnv = \{ nodes, envs, currentEnv }, i ->
+    when List.get envs (Num.toNat i) is
+        Ok { rc: 0, inner } ->
+            e0, T _ val <- List.walk inner { nodes, envs, currentEnv }
+            when val is
+                Fn { envIndex } ->
+                    decEnv e0 envIndex
+
+                _ ->
+                    e0
+
+        _ ->
+            { nodes, envs, currentEnv }
 
 wrapAndSetEnv : Evaluator, Index -> Evaluator
 wrapAndSetEnv = \{ nodes, envs }, i ->
