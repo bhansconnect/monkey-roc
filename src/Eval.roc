@@ -1,5 +1,5 @@
 interface Eval
-    exposes [eval, evalWithEnv, newEnv, printValue]
+    exposes [eval, evalWithEnvs, newEnv, printValue]
     imports [Lexer, Parser.{ Index, Node, ParsedData }]
 
 Value : [
@@ -53,29 +53,29 @@ printValue = \value ->
         _ -> "Invalid ret value"
 
 Env : {
+    rc : U32,
     inner : List [T Str Value],
     outer : Result Index [IsRoot],
 }
 
 Evaluator : {
     nodes : List Node,
-    # TODO: This setup never frees old envs.
     envs : List Env,
     currentEnv : Index,
 }
 
 setIdent : Evaluator, Str, Value -> (Evaluator, Value)
 setIdent = \{ nodes, envs: envs0, currentEnv }, ident, val ->
-    { list: envs1, value: { inner, outer } } = List.replace envs0 (Num.toNat currentEnv) (newEnv {})
+    { list: envs1, value: { rc, inner, outer } } = List.replace envs0 (Num.toNat currentEnv) (newEnv {})
     when List.findFirstIndex inner (\T k _ -> k == ident) is
         Ok i ->
             nextInner = List.set inner i (T ident val)
-            ({ nodes, currentEnv, envs: List.set envs1 (Num.toNat currentEnv) { inner: nextInner, outer } }, val)
+            ({ nodes, currentEnv, envs: List.set envs1 (Num.toNat currentEnv) { rc, inner: nextInner, outer } }, val)
 
         Err _ ->
             # TODO: check if sorted insert is faster.
             nextInner = List.append inner (T ident val)
-            ({ nodes, currentEnv, envs: List.set envs1 (Num.toNat currentEnv) { inner: nextInner, outer } }, val)
+            ({ nodes, currentEnv, envs: List.set envs1 (Num.toNat currentEnv) { rc, inner: nextInner, outer } }, val)
 
 getIdent : List Env, Index, Str -> Value
 getIdent = \envs, currentEnv, ident ->
@@ -95,23 +95,62 @@ getIdent = \envs, currentEnv, ident ->
                     makeError "identifier not found: \(ident)"
 
 newEnv : {} -> Env
-newEnv = \{} -> { inner: [], outer: Err IsRoot }
+newEnv = \{} -> { rc: 1, inner: [], outer: Err IsRoot }
+
+incEnv : Evaluator, Index -> Evaluator
+incEnv = \{ nodes, envs, currentEnv }, i ->
+    when List.get envs (Num.toNat i) is
+        Ok { rc, inner, outer: Ok nextI } ->
+            nextRc = Num.addSaturated rc 1
+            nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer: Ok nextI }
+            incEnv { nodes, envs: nextEnvs, currentEnv } nextI
+
+        Ok { rc, inner, outer } ->
+            nextRc = Num.addSaturated rc 1
+            nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer }
+            { nodes, envs: nextEnvs, currentEnv }
+
+        Err _ ->
+            crash "env index out of bounds"
+
+decEnv : Evaluator, Index -> Evaluator
+decEnv = \{ nodes, envs, currentEnv }, i ->
+    when List.get envs (Num.toNat i) is
+        Ok { rc, inner, outer: Ok nextI } ->
+            nextRc = Num.subSaturated rc 1
+            nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer: Ok nextI }
+            decEnv { nodes, envs: nextEnvs, currentEnv } nextI
+
+        Ok { rc, inner, outer } ->
+            nextRc = Num.subSaturated rc 1
+            nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer }
+            { nodes, envs: nextEnvs, currentEnv }
+
+        Err _ ->
+            crash "env index out of bounds"
 
 wrapAndSetEnv : Evaluator, Index -> Evaluator
 wrapAndSetEnv = \{ nodes, envs }, i ->
-    newIndex = List.len envs |> Num.toU32
-    nextEnvs = List.append envs { inner: [], outer: Ok i }
-    { nodes, envs: nextEnvs, currentEnv: newIndex }
+    # First pick unused envs
+    when List.findLastIndex envs (\{ rc } -> rc == 0) is
+        Ok newIndex ->
+            nextEnvs = List.set envs newIndex { rc: 1, inner: [], outer: Ok i }
+            incEnv { nodes, envs: nextEnvs, currentEnv: Num.toU32 newIndex } i
 
-eval : ParsedData -> (Env, Value)
+        Err _ ->
+            nextEnvs = List.append envs { rc: 1, inner: [], outer: Ok i }
+            newIndex = List.len envs |> Num.toU32
+            incEnv { nodes, envs: nextEnvs, currentEnv: newIndex } i
+
+eval : ParsedData -> (List Env, Value)
 eval = \pd ->
-    evalWithEnv pd (newEnv {})
+    evalWithEnvs pd [newEnv {}]
 
-evalWithEnv : ParsedData, Env -> (Env, Value)
-evalWithEnv = \{ program, nodes }, env ->
-    e0 = { nodes, envs: [env], currentEnv: 0 }
+evalWithEnvs : ParsedData, List Env -> (List Env, Value)
+evalWithEnvs = \{ program, nodes }, envs ->
+    e0 = { nodes, envs, currentEnv: 0 }
     ({ envs: outEnvs }, outVal) = evalProgram e0 program
-    (okOrUnreachable (List.get outEnvs 0) "failed to load root env", outVal)
+    (outEnvs, outVal)
 
 evalProgram : Evaluator, List Index -> (Evaluator, Value)
 evalProgram = \e0, statements ->
@@ -299,7 +338,8 @@ evalNode = \e0, index ->
             (e0, getIdent e0.envs e0.currentEnv identStr)
 
         Fn { params, body } ->
-            (e0, Fn { paramsIndex: params, bodyIndex: body, envIndex: e0.currentEnv })
+            e1 = incEnv e0 e0.currentEnv
+            (e1, Fn { paramsIndex: params, bodyIndex: body, envIndex: e1.currentEnv })
 
         Call { fn, args } ->
             (e1, fnVal) = evalNode e0 fn
@@ -319,8 +359,9 @@ evalNode = \e0, index ->
                                     _ -> crash "We already verified that we have an ident list and body when parsing"
 
                             if List.len params == List.len argVals then
-                                e2Index = e2.currentEnv
+                                oldIndex = e2.currentEnv
                                 e3 = wrapAndSetEnv e2 envIndex
+                                newIndex = e3.currentEnv
 
                                 (e6, _) =
                                     List.walk params (e3, 0) \(e4, i), param ->
@@ -329,7 +370,8 @@ evalNode = \e0, index ->
 
                                 (e7, val) = evalProgram e6 body
                                 # reset environment back to before the function was run.
-                                ({ e7 & currentEnv: e2Index }, val)
+                                e8 = decEnv e7 newIndex
+                                ({ e8 & currentEnv: oldIndex }, val)
                             else
                                 (e2, makeError "FUNCTION applied with wrong number of args")
 
