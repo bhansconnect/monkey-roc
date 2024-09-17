@@ -1,33 +1,36 @@
-interface Repl
-    exposes [run]
-    imports [pf.Stdout, pf.Stdin, pf.Task, Lexer, Parser, Eval]
+module [run]
+
+import cli.Stdout
+import cli.Stdin
+import Lexer
+import Parser
+import Eval
 
 run =
-    envs <- Task.loop ([Eval.newEnv {}])
+    Task.loop ([Eval.newEnv {}]) \envs ->
 
-    {} <- Stdout.write ">> " |> Task.await
-    line <- Stdin.line |> Task.await
+        Stdout.write! ">> "
+        line = Stdin.line!
 
-    parseResults =
-        line
-        |> Str.toUtf8
-        |> Lexer.lex
-        |> Parser.parse
+        parseResults =
+            line
+            |> Str.toUtf8
+            |> Lexer.lex
+            |> Parser.parse
 
-    when parseResults is
-        Ok parsedData ->
-            (nextEnvs, val) =
-                parsedData
-                |> Eval.evalWithEnvs envs
-            {} <- Eval.printValue val |> Stdout.line |> Task.await
+        when parseResults is
+            Ok parsedData ->
+                (nextEnvs, val) =
+                    parsedData
+                    |> Eval.evalWithEnvs envs
+                Stdout.line! (Eval.printValue val)
 
-            Task.succeed (Step nextEnvs)
+                Task.ok (Step nextEnvs)
 
-        Err errs ->
-            {} <- errs
-                |> Str.joinWith "\n\t"
-                |> \e -> "Parse Errors:\n\t\(e)"
-                |> Stdout.line
-                |> Task.await
+            Err errs ->
+                errs
+                    |> Str.joinWith "\n\t"
+                    |> \e -> "Parse Errors:\n\t$(e)"
+                    |> Stdout.line!
 
-            Task.succeed (Step envs)
+                Task.ok (Step envs)

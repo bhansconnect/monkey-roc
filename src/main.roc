@@ -1,16 +1,22 @@
-app "🐵🤘🏼"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
-    imports [pf.Arg, pf.File, pf.Path, pf.Process, pf.Stderr, pf.Stdout, pf.Task, Repl, Lexer, Parser, Eval]
-    provides [main] to pf
+app [main] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.15.0/SlwdbJ-3GR7uBWQo6zlmYWNYOxnvo8r6YABXD-45UOw.tar.br" }
+
+import cli.Arg
+import cli.File
+import cli.Stderr
+import cli.Stdout
+
+import Repl
+import Lexer
+import Parser
+import Eval
 
 main =
     # TODO: Add in arg parsing to enable more flexible use.
     task =
-        args <- Arg.list |> Task.await
+        args = Arg.list! {}
         when args is
             [_, monkeyFile] ->
-                path = Path.fromStr monkeyFile
-                bytes <- File.readBytes path |> Task.await
+                bytes = File.readBytes! monkeyFile
 
                 parseResults =
                     bytes
@@ -28,24 +34,26 @@ main =
                     Err errs ->
                         errs
                         |> Str.joinWith "\n\t"
-                        |> \e -> "Parse Errors:\n\t\(e)"
+                        |> \e -> "Parse Errors:\n\t$(e)"
                         |> Stderr.line
 
             _ ->
-                {} <- Stdout.line "Hello! This is the Monkey programming language!" |> Task.await
-                {} <- Stdout.line "Feel free to type in commands" |> Task.await
+                Stdout.line! "Hello! This is the Monkey programming language!"
+                Stdout.line! "Feel free to type in commands"
                 Repl.run
 
-    result <- Task.attempt task
+    result = Task.result! task
     when result is
         Ok {} ->
-            Process.exit 0
+            Task.ok {}
 
         Err err ->
             msg =
                 when err is
                     FileReadErr _ _ -> "Error reading input file"
-                    NoFile -> "Please pass in a monkey file to run"
+                    StdinErr _ -> "Error reading from stdin"
+                    StdoutErr _ -> "Error printing to stdout"
+                    StderrErr _ -> "Error printing to stderr"
 
-            {} <- Stderr.line msg |> Task.await
-            Process.exit 1
+            Stderr.line! msg
+            Task.err (Exit 1 "")

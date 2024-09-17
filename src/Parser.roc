@@ -1,6 +1,6 @@
-interface Parser
-    exposes [parse, debugPrint, ParsedData, Index, Node]
-    imports [Lexer.{ LexedData }]
+module [parse, debugPrint, ParsedData, Index, Node]
+
+import Lexer exposing [LexedData]
 
 Index : U32
 
@@ -72,9 +72,9 @@ addNode = \{ nodes, remainingTokens, bytes, errors }, node ->
     nextNodes = List.append nodes node
     ({ nodes: nextNodes, remainingTokens, bytes, errors }, Num.toU32 index)
 
-advanceTokens : Parser, Nat -> Parser
+advanceTokens : Parser, U64 -> Parser
 advanceTokens = \{ nodes, remainingTokens, bytes, errors }, n ->
-    { nodes, remainingTokens: List.drop remainingTokens n, bytes, errors }
+    { nodes, remainingTokens: List.dropFirst remainingTokens n, bytes, errors }
 
 addError : Parser, Str -> Parser
 addError = \{ nodes, remainingTokens, bytes, errors }, error ->
@@ -143,9 +143,9 @@ parseLetStatement = \p0 ->
                 |> okOrUnreachable "Ident is not valid utf8"
 
             (p1, identIndex) = addNode p0 (Ident ident)
-            (p2, exprIndex) <- parseExpression (advanceTokens p1 2) precLowest |> Result.map
+            (p2, exprIndex) = parseExpression? (advanceTokens p1 2) precLowest
             (p3, letIndex) = addNode p2 (Let { ident: identIndex, expr: exprIndex })
-            (consumeOptionalSemicolon p3, letIndex)
+            Ok (consumeOptionalSemicolon p3, letIndex)
 
         [{ kind: Ident }, token, ..] ->
             p0
@@ -165,9 +165,9 @@ parseLetStatement = \p0 ->
 
 parseReturnStatement : Parser -> ParseResult
 parseReturnStatement = \p0 ->
-    (p1, exprIndex) <- parseExpression p0 precLowest |> Result.map
+    (p1, exprIndex) = parseExpression? p0 precLowest
     (p2, retIndex) = addNode p1 (Return { expr: exprIndex })
-    (consumeOptionalSemicolon p2, retIndex)
+    Ok (consumeOptionalSemicolon p2, retIndex)
 
 tokenMismatch : Parser, Str, Lexer.Token -> Parser
 tokenMismatch = \p0, wanted, got ->
@@ -175,14 +175,14 @@ tokenMismatch = \p0, wanted, got ->
         Lexer.debugPrintToken [] p0.bytes got
         |> Str.fromUtf8
         |> okOrUnreachable "token is not valid utf8"
-    addError p0 "Expected next token to be \(wanted), instead got: \(debugStr)"
+    addError p0 "Expected next token to be $(wanted), instead got: $(debugStr)"
 
 # We just parse this into an expression.
 # No need to wrap it in a special node.
 parseExpressionStatement : Parser -> ParseResult
 parseExpressionStatement = \p0 ->
-    (p1, exprRes) <- parseExpression p0 precLowest |> Result.map
-    (consumeOptionalSemicolon p1, exprRes)
+    (p1, exprRes) = parseExpression? p0 precLowest
+    Ok (consumeOptionalSemicolon p1, exprRes)
 
 Precedence := U32
 precLowest = @Precedence 1
@@ -211,7 +211,7 @@ peekPrecedence = \p0 ->
 
 parseExpression : Parser, Precedence -> ParseResult
 parseExpression = \p0, basePrec ->
-    (p1, lhs) <- parsePrefix p0 |> Result.try
+    (p1, lhs) = parsePrefix? p0
     parseInfix p1 lhs basePrec
 
 parseInfix : Parser, Index, Precedence -> ParseResult
@@ -222,7 +222,7 @@ parseInfix = \p0, lhsIndex, basePrec ->
     else
         when p0.remainingTokens is
             [{ kind: LParen }, ..] ->
-                (p1, argsIndex) <- parseCallArgs (advanceTokens p0 1) |> Result.try
+                (p1, argsIndex) = parseCallArgs? (advanceTokens p0 1)
                 (p2, callIndex) = addNode p1 (Call { fn: lhsIndex, args: argsIndex })
                 parseInfix p2 callIndex basePrec
 
@@ -242,7 +242,7 @@ parseInfix = \p0, lhsIndex, basePrec ->
 
                 when binOpRes is
                     Ok binOp ->
-                        (p1, rhsIndex) <- parseExpression (advanceTokens p0 1) nextPrec |> Result.try
+                        (p1, rhsIndex) = parseExpression? (advanceTokens p0 1) nextPrec
                         (p2, binIndex) = addNode p1 (binOp { lhs: lhsIndex, rhs: rhsIndex })
                         parseInfix p2 binIndex basePrec
 
@@ -262,7 +262,7 @@ parseCallArgs = \p0 ->
             |> Ok
 
         [_, ..] ->
-            (p1, argIndex) <- parseExpression p0 precLowest |> Result.try
+            (p1, argIndex) = parseExpression? p0 precLowest
             parseCallArgsHelper p1 [argIndex]
 
         [] ->
@@ -278,7 +278,7 @@ parseCallArgsHelper = \p0, args ->
             |> Ok
 
         [{ kind: Comma }, ..] ->
-            (p1, argIndex) <- parseExpression (advanceTokens p0 1) precLowest |> Result.try
+            (p1, argIndex) = parseExpression? (advanceTokens p0 1) precLowest
             parseCallArgsHelper p1 (List.append args argIndex)
 
         [token, ..] ->
@@ -322,19 +322,19 @@ parsePrefix = \p0 ->
                 Err _ ->
                     p0
                     |> advanceTokens 1
-                    |> addError "could not parse \(intStr) as integer"
+                    |> addError "could not parse $(intStr) as integer"
                     |> Err
 
         [{ kind: Bang, index: _ }, ..] ->
-            (p1, exprIndex) <- parseExpression (advanceTokens p0 1) precPrefix |> Result.map
-            addNode p1 (Not { expr: exprIndex })
+            (p1, exprIndex) = parseExpression? (advanceTokens p0 1) precPrefix
+            Ok (addNode p1 (Not { expr: exprIndex }))
 
         [{ kind: Minus, index: _ }, ..] ->
-            (p1, exprIndex) <- parseExpression (advanceTokens p0 1) precPrefix |> Result.map
-            addNode p1 (Negate { expr: exprIndex })
+            (p1, exprIndex) = parseExpression? (advanceTokens p0 1) precPrefix
+            Ok (addNode p1 (Negate { expr: exprIndex }))
 
         [{ kind: LParen, index: _ }, ..] ->
-            (p1, exprIndex) <- parseExpression (advanceTokens p0 1) precLowest |> Result.try
+            (p1, exprIndex) = parseExpression? (advanceTokens p0 1) precLowest
             when p1.remainingTokens is
                 [{ kind: RParen }, ..] ->
                     Ok (advanceTokens p1 1, exprIndex)
@@ -375,7 +375,7 @@ parsePrefix = \p0 ->
 
             p0
             |> advanceTokens 1
-            |> addError "no prefix parse function for \(debugStr) found"
+            |> addError "no prefix parse function for $(debugStr) found"
             |> Err
 
         [] ->
@@ -387,11 +387,11 @@ parseFnExpression : Parser -> ParseResult
 parseFnExpression = \p0 ->
     when p0.remainingTokens is
         [{ kind: LParen }, ..] ->
-            (p1, paramsIndex) <- parseFnParams (advanceTokens p0 1) [] |> Result.try
+            (p1, paramsIndex) = parseFnParams? (advanceTokens p0 1) []
             when p1.remainingTokens is
                 [{ kind: LBrace }, ..] ->
-                    (p2, bodyIndex) <- parseBlock (advanceTokens p1 1) [] |> Result.map
-                    addNode p2 (Fn { params: paramsIndex, body: bodyIndex })
+                    (p2, bodyIndex) = parseBlock? (advanceTokens p1 1) []
+                    Ok (addNode p2 (Fn { params: paramsIndex, body: bodyIndex }))
 
                 [token, ..] ->
                     p1
@@ -451,14 +451,14 @@ parseIfExpression : Parser -> ParseResult
 parseIfExpression = \p0 ->
     when p0.remainingTokens is
         [{ kind: LParen }, ..] ->
-            (p1, condIndex) <- parseExpression (advanceTokens p0 1) precLowest |> Result.try
+            (p1, condIndex) = parseExpression? (advanceTokens p0 1) precLowest
             when p1.remainingTokens is
                 [{ kind: RParen }, { kind: LBrace }, ..] ->
-                    (p2, consequenceIndex) <- parseBlock (advanceTokens p1 2) [] |> Result.try
+                    (p2, consequenceIndex) = parseBlock? (advanceTokens p1 2) []
                     when p2.remainingTokens is
                         [{ kind: Else }, { kind: LBrace }, ..] ->
-                            (p3, alternativeIndex) <- parseBlock (advanceTokens p2 2) [] |> Result.map
-                            addNode p3 (IfElse { cond: condIndex, consequence: consequenceIndex, alternative: alternativeIndex })
+                            (p3, alternativeIndex) = parseBlock? (advanceTokens p2 2) []
+                            Ok (addNode p3 (IfElse { cond: condIndex, consequence: consequenceIndex, alternative: alternativeIndex }))
 
                         [_, ..] ->
                             addNode p2 (If { cond: condIndex, consequence: consequenceIndex })
@@ -535,7 +535,7 @@ eofCrash = \{} ->
 okOrUnreachable = \res, str ->
     when res is
         Ok v -> v
-        Err _ -> crash "unreachable: \(str)"
+        Err _ -> crash "unreachable: $(str)"
 
 debugPrint : Str, ParsedData -> Str
 debugPrint = \buf, { nodes, program } ->
@@ -556,7 +556,7 @@ debugPrintNodeStatement = \buf, nodes, index, spaces ->
 debugPrintNode : Str, List Node, Index, Str -> Str
 debugPrintNode = \buf, nodes, index, spaces ->
     node =
-        when List.get nodes (Num.toNat index) is
+        when List.get nodes (Num.toU64 index) is
             Ok v -> v
             Err _ -> crash "node index out of bounds"
 
@@ -731,7 +731,7 @@ expect
         parsed.program
         |> List.map \letIndex ->
             letNode =
-                when List.get parsed.nodes (Num.toNat letIndex) is
+                when List.get parsed.nodes (Num.toU64 letIndex) is
                     Ok v -> v
                     _ -> crash "let node outside of list bounds"
 
@@ -741,7 +741,7 @@ expect
                     _ -> crash "all statements in program should be let statements"
 
             identNode =
-                when List.get parsed.nodes (Num.toNat identIndex) is
+                when List.get parsed.nodes (Num.toU64 identIndex) is
                     Ok v -> v
                     _ -> crash "ident node outside of list bounds"
 
@@ -792,7 +792,7 @@ expect
         parsed.program
         |> List.map \retIndex ->
             retNode =
-                when List.get parsed.nodes (Num.toNat retIndex) is
+                when List.get parsed.nodes (Num.toU64 retIndex) is
                     Ok v -> v
                     _ -> crash "let node outside of list bounds"
 

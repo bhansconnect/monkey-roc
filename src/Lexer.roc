@@ -1,6 +1,4 @@
-interface Lexer
-    exposes [lex, debugPrint, debugPrintToken, Token, Kind, getInt, getIdent, LexedData]
-    imports []
+module [lex, debugPrint, debugPrintToken, Token, Kind, getInt, getIdent, LexedData]
 
 LexedData : {
     bytes : List U8,
@@ -118,7 +116,7 @@ lex = \bytes ->
                 consumeToken state Semicolon 1 |> helper
 
             ['\r', ..] | ['\n', ..] | ['\t', ..] | [' ', ..] ->
-                nextRemaining = List.drop state.remaining 1
+                nextRemaining = List.dropFirst state.remaining 1
                 nextIndex = state.index + 1
                 { tokens: state.tokens, remaining: nextRemaining, index: nextIndex } |> helper
 
@@ -139,12 +137,12 @@ lex = \bytes ->
 
 consumeToken = \{ tokens, remaining, index }, kind, size ->
     nextTokens = List.append tokens { kind, index }
-    nextRemaining = List.drop remaining (Num.toNat size)
+    nextRemaining = List.dropFirst remaining (Num.toU64 size)
     nextIndex = index + size
     { tokens: nextTokens, remaining: nextRemaining, index: nextIndex }
 
 identLength = \remaining, size ->
-    when List.get remaining (Num.toNat size) is
+    when List.get remaining (Num.toU64 size) is
         Ok ch if isLetter ch ->
             identLength remaining (size + 1)
 
@@ -152,7 +150,7 @@ identLength = \remaining, size ->
             size
 
 intLength = \remaining, size ->
-    when List.get remaining (Num.toNat size) is
+    when List.get remaining (Num.toU64 size) is
         Ok ch if isDigit ch ->
             intLength remaining (size + 1)
 
@@ -166,12 +164,12 @@ isDigit = \ch ->
     ch >= '0' && ch <= '9'
 
 getIdent = \bytes, index ->
-    len = identLength (List.drop bytes (Num.toNat index)) 1
-    List.sublist bytes { start: Num.toNat index, len }
+    len = identLength (List.dropFirst bytes (Num.toU64 index)) 1
+    List.sublist bytes { start: Num.toU64 index, len }
 
 getInt = \bytes, index ->
-    len = intLength (List.drop bytes (Num.toNat index)) 1
-    List.sublist bytes { start: Num.toNat index, len }
+    len = intLength (List.dropFirst bytes (Num.toU64 index)) 1
+    List.sublist bytes { start: Num.toU64 index, len }
 
 debugPrint : List U8, LexedData -> List U8
 debugPrint = \buf, { bytes, tokens } ->

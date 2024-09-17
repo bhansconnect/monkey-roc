@@ -1,6 +1,7 @@
-interface Eval
-    exposes [eval, evalWithEnvs, newEnv, printValue]
-    imports [Lexer, Parser.{ Index, Node, ParsedData }]
+module [eval, evalWithEnvs, newEnv, printValue]
+
+import Lexer
+import Parser exposing [Index, Node, ParsedData]
 
 Value : [
     Int I64,
@@ -66,22 +67,22 @@ Evaluator : {
 
 setIdent : Evaluator, Str, Value -> (Evaluator, Value)
 setIdent = \{ nodes, envs: envs0, currentEnv }, ident, val ->
-    { list: envs1, value: { rc, inner, outer } } = List.replace envs0 (Num.toNat currentEnv) (newEnv {})
+    { list: envs1, value: { rc, inner, outer } } = List.replace envs0 (Num.toU64 currentEnv) (newEnv {})
     when List.findFirstIndex inner (\T k _ -> k == ident) is
         Ok i ->
             nextInner = List.set inner i (T ident val)
-            ({ nodes, currentEnv, envs: List.set envs1 (Num.toNat currentEnv) { rc, inner: nextInner, outer } }, val)
+            ({ nodes, currentEnv, envs: List.set envs1 (Num.toU64 currentEnv) { rc, inner: nextInner, outer } }, val)
 
         Err _ ->
             # TODO: check if sorted insert is faster.
             nextInner = List.append inner (T ident val)
-            ({ nodes, currentEnv, envs: List.set envs1 (Num.toNat currentEnv) { rc, inner: nextInner, outer } }, val)
+            ({ nodes, currentEnv, envs: List.set envs1 (Num.toU64 currentEnv) { rc, inner: nextInner, outer } }, val)
 
 getIdent : List Env, Index, Str -> Value
 getIdent = \envs, currentEnv, ident ->
     # TODO: maybe do binary search if the list is large enough.
     { inner, outer } =
-        when List.get envs (Num.toNat currentEnv) is
+        when List.get envs (Num.toU64 currentEnv) is
             Ok env -> env
             Err _ -> crash "bad env index"
     when List.findFirst inner (\T k _ -> k == ident) is
@@ -92,22 +93,22 @@ getIdent = \envs, currentEnv, ident ->
                     getIdent envs envIndex ident
 
                 Err _ ->
-                    makeError "identifier not found: \(ident)"
+                    makeError "identifier not found: $(ident)"
 
 newEnv : {} -> Env
 newEnv = \{} -> { rc: 1, inner: [], outer: Err IsRoot }
 
 incEnv : Evaluator, Index -> Evaluator
 incEnv = \{ nodes, envs, currentEnv }, i ->
-    when List.get envs (Num.toNat i) is
+    when List.get envs (Num.toU64 i) is
         Ok { rc, inner, outer: Ok nextI } ->
             nextRc = Num.addSaturated rc 1
-            nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer: Ok nextI }
+            nextEnvs = List.set envs (Num.toU64 i) { rc: nextRc, inner, outer: Ok nextI }
             incEnv { nodes, envs: nextEnvs, currentEnv } nextI
 
         Ok { rc, inner, outer } ->
             nextRc = Num.addSaturated rc 1
-            nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer }
+            nextEnvs = List.set envs (Num.toU64 i) { rc: nextRc, inner, outer }
             { nodes, envs: nextEnvs, currentEnv }
 
         Err _ ->
@@ -115,16 +116,16 @@ incEnv = \{ nodes, envs, currentEnv }, i ->
 
 decEnv : Evaluator, Index -> Evaluator
 decEnv = \{ nodes, envs, currentEnv }, i ->
-    when List.get envs (Num.toNat i) is
+    when List.get envs (Num.toU64 i) is
         Ok { rc, inner, outer: Ok nextI } ->
             nextRc = Num.subSaturated rc 1
-            nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer: Ok nextI }
+            nextEnvs = List.set envs (Num.toU64 i) { rc: nextRc, inner, outer: Ok nextI }
             decEnv { nodes, envs: nextEnvs, currentEnv } nextI
             |> maybeFreeEnv i
 
         Ok { rc, inner, outer } ->
             nextRc = Num.subSaturated rc 1
-            nextEnvs = List.set envs (Num.toNat i) { rc: nextRc, inner, outer }
+            nextEnvs = List.set envs (Num.toU64 i) { rc: nextRc, inner, outer }
             { nodes, envs: nextEnvs, currentEnv }
             |> maybeFreeEnv i
 
@@ -132,15 +133,15 @@ decEnv = \{ nodes, envs, currentEnv }, i ->
             crash "env index out of bounds"
 
 maybeFreeEnv = \{ nodes, envs, currentEnv }, i ->
-    when List.get envs (Num.toNat i) is
+    when List.get envs (Num.toU64 i) is
         Ok { rc: 0, inner } ->
-            e0, T _ val <- List.walk inner { nodes, envs, currentEnv }
-            when val is
-                Fn { envIndex } ->
-                    decEnv e0 envIndex
+            List.walk inner { nodes, envs, currentEnv } \e0, T _ val ->
+                when val is
+                    Fn { envIndex } ->
+                        decEnv e0 envIndex
 
-                _ ->
-                    e0
+                    _ ->
+                        e0
 
         _ ->
             { nodes, envs, currentEnv }
@@ -216,7 +217,7 @@ evalNode = \e0, index ->
                 Error e -> (e1, Error e)
                 _ ->
                     type = valueToType val
-                    (e1, makeError "unknown operator: -\(type)")
+                    (e1, makeError "unknown operator: -$(type)")
 
         Plus { lhs, rhs } ->
             (e1, lhsVal) = evalNode e0 lhs
@@ -393,7 +394,7 @@ evalNode = \e0, index ->
 
                         _ ->
                             type = valueToType fnVal
-                            (e2, makeError "expected FUNCTION instead got \(type)")
+                            (e2, makeError "expected FUNCTION instead got $(type)")
 
                 _ -> crash "We already verified that we have call args when parsing"
 
@@ -412,9 +413,9 @@ infixError = \op, lhs, rhs ->
     lhsType = valueToType lhs
     rhsType = valueToType rhs
     if lhsType != rhsType then
-        makeError "type mismatch: \(lhsType) \(op) \(rhsType)"
+        makeError "type mismatch: $(lhsType) $(op) $(rhsType)"
     else
-        makeError "unknown operator: \(lhsType) \(op) \(rhsType)"
+        makeError "unknown operator: $(lhsType) $(op) $(rhsType)"
 
 isTruthy : Value -> Bool
 isTruthy = \val ->
@@ -427,14 +428,14 @@ isTruthy = \val ->
 
 loadOrCrash : Evaluator, Index -> Node
 loadOrCrash = \{ nodes }, i ->
-    when List.get nodes (Num.toNat i) is
+    when List.get nodes (Num.toU64 i) is
         Ok v -> v
         Err _ -> crash "Node index out of bounds during eval"
 
 okOrUnreachable = \res, str ->
     when res is
         Ok v -> v
-        Err _ -> crash "unreachable: \(str)"
+        Err _ -> crash "unreachable: $(str)"
 
 runFromSource = \input ->
     input
