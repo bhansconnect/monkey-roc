@@ -101,11 +101,6 @@ newEnv = \{} -> { rc: 1, inner: [], outer: Err IsRoot }
 incEnv : Evaluator, Index -> Evaluator
 incEnv = \{ nodes, envs, currentEnv }, i ->
     when List.get envs (Num.toU64 i) is
-        Ok { rc, inner, outer: Ok nextI } ->
-            nextRc = Num.addSaturated rc 1
-            nextEnvs = List.set envs (Num.toU64 i) { rc: nextRc, inner, outer: Ok nextI }
-            incEnv { nodes, envs: nextEnvs, currentEnv } nextI
-
         Ok { rc, inner, outer } ->
             nextRc = Num.addSaturated rc 1
             nextEnvs = List.set envs (Num.toU64 i) { rc: nextRc, inner, outer }
@@ -117,12 +112,6 @@ incEnv = \{ nodes, envs, currentEnv }, i ->
 decEnv : Evaluator, Index -> Evaluator
 decEnv = \{ nodes, envs, currentEnv }, i ->
     when List.get envs (Num.toU64 i) is
-        Ok { rc, inner, outer: Ok nextI } ->
-            nextRc = Num.subSaturated rc 1
-            nextEnvs = List.set envs (Num.toU64 i) { rc: nextRc, inner, outer: Ok nextI }
-            decEnv { nodes, envs: nextEnvs, currentEnv } nextI
-            |> maybeFreeEnv i
-
         Ok { rc, inner, outer } ->
             nextRc = Num.subSaturated rc 1
             nextEnvs = List.set envs (Num.toU64 i) { rc: nextRc, inner, outer }
