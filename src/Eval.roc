@@ -15,6 +15,7 @@ Value : [
     RetTrue,
     RetFalse,
     RetNull,
+    RetFn { paramsIndex : Index, bodyIndex : Index, envIndex : Index },
 
     # Errors are just strings.
     # They are boxed to not bloat Value.
@@ -167,6 +168,7 @@ evalProgram = \e0, statements ->
             RetTrue -> Break (e2, True)
             RetFalse -> Break (e2, False)
             RetNull -> Break (e2, Null)
+            RetFn data -> Break (e2, Fn data)
             Error e -> Break (e2, Error e)
             _ -> Continue (e2, val)
 
@@ -179,6 +181,7 @@ evalBlock = \e0, statements ->
             RetTrue -> Break (e2, RetTrue)
             RetFalse -> Break (e2, RetFalse)
             RetNull -> Break (e2, RetNull)
+            RetFn data -> Break (e2, Fn data)
             Error e -> Break (e2, Error e)
             _ -> Continue (e2, val)
 
@@ -326,6 +329,7 @@ evalNode = \e0, index ->
                 True -> (e1, RetTrue)
                 False -> (e1, RetFalse)
                 Null -> (e1, RetNull)
+                Fn data -> (e1, RetFn data)
                 Error e -> (e1, Error e)
                 _ -> (e1, Null)
 
@@ -615,3 +619,37 @@ expect
     expected = Int 4
     out == expected
 
+expect
+    input =
+        """
+        let crazy = fn() {
+          let x = 1;
+          return fn() { return x };
+          let x = 2;
+        };
+
+        let closure = crazy();
+        closure();
+        """
+    out = runFromSource input
+
+    expected = Int 1
+    out == expected
+
+expect
+    input =
+        """
+        let crazy = fn() {
+          let x = 1;
+          let out = fn () { return x };
+          let x = 2;
+          return out;
+        };
+
+        let closure = crazy();
+        closure();
+        """
+    out = runFromSource input
+
+    expected = Int 2
+    out == expected
