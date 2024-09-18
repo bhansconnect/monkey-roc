@@ -655,3 +655,25 @@ expect
 
     expected = Int 2
     out == expected
+
+expect
+    input =
+        """
+        let fibonacci = fn(x) {
+          if (x == 0) {
+            0
+          } else {
+            if (x == 1) {
+              return 1;
+            } else {
+              fibonacci(x - 1) + fibonacci(x - 2);
+            }
+          }
+        };
+
+        fibonacci(10)
+        """
+    out = runFromSource input
+
+    expected = Int 55
+    out == expected
