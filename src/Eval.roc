@@ -183,7 +183,7 @@ evalBlock = \e0, statements ->
             RetTrue -> Break (e2, RetTrue)
             RetFalse -> Break (e2, RetFalse)
             RetNull -> Break (e2, RetNull)
-            RetFn data -> Break (e2, Fn data)
+            RetFn data -> Break (e2, RetFn data)
             Error e -> Break (e2, Error e)
             _ -> Continue (e2, val)
 
