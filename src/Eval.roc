@@ -56,7 +56,9 @@ printValue = \value ->
 
 Env : {
     rc : U32,
-    inner : List [T Str Value],
+    # Given most environments are small, a list and linear search was faster than a dict.
+    # That said, only did a few tests.
+    inner : List (Str, Value),
     outer : Result Index [IsRoot],
 }
 
@@ -69,14 +71,14 @@ Evaluator : {
 setIdent : Evaluator, Str, Value -> (Evaluator, Value)
 setIdent = \{ nodes, envs: envs0, currentEnv }, ident, val ->
     { list: envs1, value: { rc, inner, outer } } = List.replace envs0 (Num.toU64 currentEnv) (newEnv {})
-    when List.findFirstIndex inner (\T k _ -> k == ident) is
+    when List.findFirstIndex inner (\(k, _) -> k == ident) is
         Ok i ->
-            nextInner = List.set inner i (T ident val)
+            nextInner = List.set inner i (ident, val)
             ({ nodes, currentEnv, envs: List.set envs1 (Num.toU64 currentEnv) { rc, inner: nextInner, outer } }, val)
 
         Err _ ->
             # TODO: check if sorted insert is faster.
-            nextInner = List.append inner (T ident val)
+            nextInner = List.append inner (ident, val)
             ({ nodes, currentEnv, envs: List.set envs1 (Num.toU64 currentEnv) { rc, inner: nextInner, outer } }, val)
 
 getIdent : List Env, Index, Str -> Value
@@ -86,8 +88,8 @@ getIdent = \envs, currentEnv, ident ->
         when List.get envs (Num.toU64 currentEnv) is
             Ok env -> env
             Err _ -> crash "bad env index"
-    when List.findFirst inner (\T k _ -> k == ident) is
-        Ok (T _ v) -> v
+    when List.findFirst inner (\(k, _) -> k == ident) is
+        Ok (_, v) -> v
         Err _ ->
             when outer is
                 Ok envIndex ->
@@ -125,7 +127,7 @@ decEnv = \{ nodes, envs, currentEnv }, i ->
 maybeFreeEnv = \{ nodes, envs, currentEnv }, i ->
     when List.get envs (Num.toU64 i) is
         Ok { rc: 0, inner } ->
-            List.walk inner { nodes, envs, currentEnv } \e0, T _ val ->
+            List.walk inner { nodes, envs, currentEnv } \e0, (_, val) ->
                 when val is
                     Fn { envIndex } ->
                         decEnv e0 envIndex
