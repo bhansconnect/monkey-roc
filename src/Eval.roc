@@ -31,6 +31,23 @@ Value : [
     Error (Box Str),
 ]
 
+valueListEq : List Value, List Value -> Bool
+valueListEq = \lhs, rhs ->
+    List.map2 lhs rhs valueEq
+    |> List.all \x -> x
+
+valueEq : Value, Value -> Bool
+valueEq = \lhs, rhs ->
+    when (lhs, rhs) is
+        (True, True) | (False, False) | (Null, Null) ->
+            Bool.true
+
+        (Int x, Int y) ->
+            x == y
+
+        _ ->
+            Bool.false
+
 makeError : Str -> Value
 makeError = \str -> Error (Box.box str)
 
@@ -316,7 +333,7 @@ buildNode = \nodes, index ->
             \e0 ->
                 (e1, lhsVal) = lhsClosure e0
                 (e2, rhsVal) = rhsClosure e1
-                (e2, (lhsVal == rhsVal) |> boolToValue)
+                (e2, valueEq lhsVal rhsVal |> boolToValue)
 
         NotEq { lhs, rhs } ->
             lhsClosure = buildNode nodes lhs
@@ -324,7 +341,7 @@ buildNode = \nodes, index ->
             \e0 ->
                 (e1, lhsVal) = lhsClosure e0
                 (e2, rhsVal) = rhsClosure e1
-                (e2, (lhsVal != rhsVal) |> boolToValue)
+                (e2, !(valueEq lhsVal rhsVal) |> boolToValue)
 
         If { cond, consequence } ->
             condClosure = buildNode nodes cond
@@ -494,7 +511,7 @@ expect
     out = List.map inputs runFromSource
 
     expected = [Int 5, Int 10, Int -5, Int -10, True, False]
-    out == expected
+    valueListEq out expected
 
 expect
     inputs = [
@@ -515,7 +532,7 @@ expect
         False,
         True,
     ]
-    out == expected
+    valueListEq out expected
 
 expect
     inputs = [
@@ -546,7 +563,7 @@ expect
         Int 37,
         Int 50,
     ]
-    out == expected
+    valueListEq out expected
 
 expect
     inputs = [
@@ -573,7 +590,7 @@ expect
         False,
         True,
     ]
-    out == expected
+    valueListEq out expected
 
 expect
     inputs = [
@@ -596,7 +613,7 @@ expect
         Int 10,
         Int 20,
     ]
-    out == expected
+    valueListEq out expected
 
 expect
     inputs = [
@@ -615,7 +632,7 @@ expect
         Int 10,
         Int 10,
     ]
-    out == expected
+    valueListEq out expected
 
 expect
     inputs = [
@@ -632,7 +649,7 @@ expect
         Int 5,
         Int 15,
     ]
-    out == expected
+    valueListEq out expected
 
 expect
     inputs = [
@@ -652,7 +669,7 @@ expect
         Int 5,
         # Int 20,
     ]
-    out == expected
+    valueListEq out expected
 
 expect
     input =
@@ -667,7 +684,7 @@ expect
     out = runFromSource input
 
     expected = Int 4
-    out == expected
+    valueEq out expected
 
 expect
     input =
@@ -684,7 +701,7 @@ expect
     out = runFromSource input
 
     expected = Int 1
-    out == expected
+    valueEq out expected
 
 expect
     input =
@@ -702,7 +719,7 @@ expect
     out = runFromSource input
 
     expected = Int 2
-    out == expected
+    valueEq out expected
 
 expect
     input =
@@ -724,4 +741,4 @@ expect
     out = runFromSource input
 
     expected = Int 55
-    out == expected
+    valueEq out expected
